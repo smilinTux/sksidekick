@@ -10,7 +10,7 @@ A `.sksk` file is a plain (uncompressed) POSIX tar with exactly three members, i
 
 | Member | Contents | Encrypted |
 |---|---|---|
-| `manifest.json` | `format` (`sksidekick.archive.v1`), `created` (UTC, ISO 8601), `purpose` (`export`, `backup` or `move`), `recipient` (the age public key), `payload_sha256` (sha256 of `payload.age`), `mac` (see below) | no; it names no files |
+| `manifest.json` | `format` (`sksidekick.archive.v1`), `created` (UTC, ISO 8601), `purpose` (`export`, `backup` or `move`), `recipient` (the age public key), `payload_sha256` (sha256 of `payload.age`), `wrapped_sha256` (sha256 of `recovery.identity.age`), `mac` (see below) | no; it names no files |
 | `recovery.identity.age` | the sidekick's age X25519 secret key, encrypted with the recovery phrase (age scrypt passphrase mode) | yes, by the phrase |
 | `payload.age` | a tar.gz of the story, encrypted to `recipient` (age X25519 mode) | yes, by the key |
 
@@ -27,11 +27,17 @@ rebuilt from the memory files.
 ## Authentication (`mac`)
 
 `mac` is HMAC-SHA256, hex, over the canonical JSON (keys sorted, no spaces) of the manifest fields `format`, `created`,
-`purpose`, `recipient` and `payload_sha256`. Its key is `sha256("sksidekick.archive.v1 mac" + NUL + <age secret key text>)`.
-Only someone holding the sidekick's secret key (the running sidekick, or anyone with the recovery phrase) can make a
-valid `mac`. Because the payload is bound by `payload_sha256`, a valid `mac` proves the whole archive was made by
-this sidekick. A reader refuses an archive whose `mac` is missing or wrong. Opening an archive by hand with stock
-`age` (below) does not check the `mac`.
+`purpose`, `recipient`, `payload_sha256` and `wrapped_sha256`. Its key is
+`sha256("sksidekick.archive.v1 mac" + NUL + <age secret key text>)`. Only someone holding the sidekick's secret key
+(the running sidekick, or anyone with the recovery phrase) can make a valid `mac`. Because both encrypted members are
+bound by their sha256, a valid `mac` proves the archive's contents were sealed by a holder of this sidekick's key and
+not changed since; it does not say which copy made it or when beyond `created`. A reader refuses an archive whose
+`mac` is missing, is not 64 lower-case hex characters, or is wrong, so archives made before the `mac` existed are
+refused too. Opening an archive by hand with stock `age` (below) does not check the `mac`.
+
+The sidekick also keeps `keys/recovery.mac`, an HMAC of its own wrapped key under the live key. Every export and
+every drill checks it, so a damaged recovery key is found while the sidekick still runs, not on the day the phrase
+is the only way back.
 
 ## What it protects and what it does not
 
@@ -70,13 +76,16 @@ Checked with age v1.2.1 and GNU tar on 2026-11-20.
 Treat every archive as hostile. A conforming reader refuses the whole archive when:
 
 - the outer tar does not hold exactly the three members above, in order, as regular files;
-- the manifest is not a JSON object, `payload_sha256` does not match, the `mac` is missing or wrong, or the payload does not decrypt;
+- the manifest is not a JSON object, `payload_sha256` or `wrapped_sha256` does not match, the `mac` is missing,
+  malformed or wrong, or the payload does not decrypt;
 - any payload member is not a regular file, has an absolute path, contains `..`, is outside `story/`
   (other than `inner-manifest.json`), lands in `keys/` or `state/`, or is a search index (`index.db*`);
-- two members differ only in letter case (they would collide on macOS);
+- two members differ only in letter case or Unicode normalization (they would collide on macOS);
 - the story would exceed the size limit (4 GiB by default, `SKSIDEKICK_MAX_STORY_BYTES`);
 - the files present differ from `inner-manifest.json`, or any checksum differs.
 
-It writes nothing until every check has passed, builds the restored home beside the target and moves it into place
-in one step, and only restores into a sidekick home that holds no files at all. Restored files are readable only by
-their owner (0600 in a 0700 directory).
+It writes nothing until every check has passed, and only restores into a sidekick home that holds no files at all.
+It builds the restored home in a staging directory inside the target (so a mount point or a symlinked home works),
+then renames each part into place, keys and state last; a failure removes what was moved. A staging directory left by
+an interrupted import is ignored and cleared on the next try. Restored files are readable only by their owner (0600
+in a 0700 directory) and are synced to disk.

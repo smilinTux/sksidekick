@@ -198,9 +198,8 @@ def test_dir_copy_is_verified_at_the_destination(keyed: Home, tmp_path: Path, mo
 
     def bad_copy(src, dst):
         real_copy(src, dst)
-        data = bytearray(Path(dst).read_bytes())
-        data[len(data) // 2] ^= 0x01
-        Path(dst).write_bytes(bytes(data))
+        data = Path(dst).read_bytes()
+        Path(dst).write_bytes(data[: len(data) // 4])  # the middle can be tar padding; a short copy is not
 
     monkeypatch.setattr(backup.shutil, "copyfile", bad_copy)
     res = backup.run_backup(keyed, now=T0)
