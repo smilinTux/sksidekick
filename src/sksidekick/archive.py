@@ -2,7 +2,8 @@
 
 An archive is a plain tar with exactly three members, in this order:
 
-* ``manifest.json``: public fields only (format, created, purpose, recipient, payload sha256, mac), no file names.
+* ``manifest.json``: public fields only (format, created, purpose, recipient, payload and wrapped-key sha256, mac),
+  no file names.
 * ``recovery.identity.age``: the sidekick's key, wrapped with the recovery phrase.
 * ``payload.age``: a tar.gz of the story, age-encrypted to the sidekick's key.
 
@@ -20,16 +21,19 @@ import hmac
 import io
 import json
 import os
+import re
+import secrets
 import shutil
 import tarfile
 import tempfile
+import unicodedata
 from pathlib import Path, PurePosixPath
 
 import pyrage
 from pyrage import x25519
 
 from sksidekick import keys
-from sksidekick.home import Home
+from sksidekick.home import STAGING_PREFIX, Home
 
 FORMAT = "sksidekick.archive.v1"
 OUTER = ("manifest.json", "recovery.identity.age", "payload.age")
@@ -37,7 +41,8 @@ INNER_MANIFEST = "inner-manifest.json"
 STORY = "story"
 PURPOSES = ("export", "backup", "move")
 MAX_STORY_BYTES = int(os.environ.get("SKSIDEKICK_MAX_STORY_BYTES", 4 * 1024**3))
-_MAC_FIELDS = ("format", "created", "purpose", "recipient", "payload_sha256")
+_MAC_FIELDS = ("format", "created", "purpose", "recipient", "payload_sha256", "wrapped_sha256")
+_HEX_MAC = re.compile(r"[0-9a-f]{64}")
 _REFUSED_TOP = {"keys", "state"}
 
 
@@ -96,11 +101,12 @@ def _write_envelope(
         "purpose": purpose,
         "recipient": str(recipient),
         "payload_sha256": _sha256(payload),
+        "wrapped_sha256": _sha256(wrapped),
     }
     manifest["mac"] = _mac(identity, manifest) if identity is not None else None
-    part = dest.with_name(dest.name + ".part")
+    part = dest.with_name(f"{dest.name}.{secrets.token_hex(4)}.part")
     try:
-        fd = os.open(part, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        fd = os.open(part, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "wb") as f:
             with tarfile.open(fileobj=f, mode="w") as t:
                 _add(t, OUTER[0], json.dumps(manifest, indent=1).encode())
@@ -132,7 +138,7 @@ def export(home: Home, dest: Path, *, purpose: str = "export") -> Path:
             _add(t, f"{STORY}/{rel.as_posix()}", data)
         inner = {"format": FORMAT, "created": _now(), "instance_id": home.instance()["instance_id"], "files": files}
         _add(t, INNER_MANIFEST, json.dumps(inner, indent=1).encode())
-    wrapped = (home.keys_dir / keys.WRAPPED).read_bytes()
+    wrapped = keys.checked_wrapped(home)
     return _write_envelope(
         dest, buf.getvalue(), keys.recipient(home), wrapped, identity=keys.load_identity(home), purpose=purpose
     )
@@ -183,8 +189,10 @@ def _open_payload(outer: dict[str, bytes], identity: x25519.Identity) -> tuple[d
         raise ArchiveDamaged(f"unsupported archive format {manifest.get('format')!r}")
     if _sha256(outer["payload.age"]) != manifest.get("payload_sha256"):
         raise ArchiveDamaged("archive damaged: payload checksum does not match")
+    if _sha256(outer["recovery.identity.age"]) != manifest.get("wrapped_sha256"):
+        raise ArchiveDamaged("archive damaged: the recovery key inside it does not match, so the phrase could not open it")
     mac = manifest.get("mac")
-    if not isinstance(mac, str) or not hmac.compare_digest(mac, _mac(identity, manifest)):
+    if not isinstance(mac, str) or not _HEX_MAC.fullmatch(mac) or not hmac.compare_digest(mac, _mac(identity, manifest)):
         raise ArchiveDamaged("archive refused: it was not made by this sidekick (authentication failed)")
     try:
         plain = pyrage.decrypt(outer["payload.age"], [identity])
@@ -207,9 +215,10 @@ def _open_payload(outer: dict[str, bytes], identity: x25519.Identity) -> tuple[d
                     inner = json.loads(data)
                     continue
                 rel = _safe_rel(m.name).as_posix()
-                if rel.casefold() in seen:
+                key = unicodedata.normalize("NFC", rel).casefold()  # macOS folds both case and normalization
+                if key in seen:
                     raise ArchiveDamaged(f"archive refused: duplicate member {rel!r}")
-                seen.add(rel.casefold())
+                seen.add(key)
                 files[rel] = data
     except (tarfile.TarError, EOFError, ValueError, OSError) as exc:
         if isinstance(exc, ArchiveDamaged):
@@ -242,6 +251,15 @@ def _write_private_file(dest: Path, data: bytes) -> None:
     fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "wb") as f:
         f.write(data)
+        f.flush()
+        keys.full_fsync(f.fileno())
+
+
+def _clear_empty(path: Path) -> None:
+    """Remove a directory tree that holds no files (the target was checked empty)."""
+    if any(p.is_file() or p.is_symlink() for p in path.rglob("*")):
+        raise FileExistsError(f"{path} changed during import; not overwriting it")
+    shutil.rmtree(path)
 
 
 def import_archive(
@@ -253,8 +271,10 @@ def import_archive(
 ) -> dict:
     """Restore an archive into an empty home. Returns the inner manifest (plus purpose).
 
-    The whole new home is built beside the target and moved into place in one
-    rename, so a failure at any point leaves the target exactly as it was.
+    The new home is built in a staging directory INSIDE the target (so it works
+    for a mount point, a symlinked home or a read-only parent), then each part is
+    renamed into place, with keys and state last. A failure removes what was
+    moved, so the target is left empty again.
     """
     if not target.is_empty():
         raise FileExistsError(f"{target.root} already holds a sidekick; import only into an empty home")
@@ -264,24 +284,34 @@ def import_archive(
             raise ValueError("import needs the recovery phrase or the identity")
         identity = keys.unwrap_identity(outer["recovery.identity.age"], phrase)
     inner, files = _open_payload(outer, identity)
-    parent = target.root.parent
-    parent.mkdir(parents=True, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(prefix=".sksidekick-import-", dir=parent))
+    root = target.root.resolve() if target.root.is_symlink() else target.root
+    root.mkdir(parents=True, exist_ok=True)
+    os.chmod(root, 0o700)
+    for stale in root.glob(STAGING_PREFIX + "*"):
+        shutil.rmtree(stale) if stale.is_dir() and not stale.is_symlink() else stale.unlink()
+    staging = Path(tempfile.mkdtemp(prefix=STAGING_PREFIX, dir=root))
+    moved: list[Path] = []
     try:
-        os.chmod(staging, 0o700)
         built = Home(staging)
         for rel, data in files.items():
             _write_private_file(staging / rel, data)
         keys.install_identity(built, identity, outer["recovery.identity.age"])
         built.new_instance()
-        if target.root.exists():
-            if not target.is_empty():
-                raise FileExistsError(f"{target.root} changed during import; not overwriting it")
-            shutil.rmtree(target.root)
-        os.replace(staging, target.root)
+        order = sorted(staging.iterdir(), key=lambda p: (p.name in ("keys", "state"), p.name == "state", p.name))
+        for child in order:
+            dest = root / child.name
+            if dest.is_symlink() or dest.is_file():
+                raise FileExistsError(f"{dest} changed during import; not overwriting it")
+            if dest.exists():
+                _clear_empty(dest)
+            os.replace(child, dest)
+            moved.append(dest)
+    except BaseException:
+        for dest in moved:
+            shutil.rmtree(dest, ignore_errors=True) if dest.is_dir() else dest.unlink(missing_ok=True)
+        raise
     finally:
-        if staging.exists():
-            shutil.rmtree(staging, ignore_errors=True)
+        shutil.rmtree(staging, ignore_errors=True)
     return inner
 
 

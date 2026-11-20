@@ -54,7 +54,7 @@ def test_delete_shreds_keys_before_files(keyed, monkeypatch):
 def test_delete_removes_everything_and_reports(keyed):
     home, _ = keyed
     res = lifecycle.delete(home)
-    assert sorted(res["keys_destroyed"]) == ["live.identity", "recipient.txt", "recovery.identity.age"]
+    assert sorted(res["keys_destroyed"]) == ["live.identity", "recipient.txt", "recovery.identity.age", "recovery.mac"]
     assert res["files_removed"] > 0
     assert not home.root.exists()
 
@@ -140,3 +140,54 @@ def test_move_out_marks_moving_before_the_archive_exists(keyed, tmp_path: Path, 
     monkeypatch.setattr(lifecycle.archive, "export", spy)
     lifecycle.move_out(home, tmp_path / "move.sksk")
     assert seen == ["moving"]
+
+
+# review round 2 -------------------------------------------------------------
+
+
+def test_delete_refuses_a_directory_that_is_not_a_sidekick(tmp_path: Path):
+    d = tmp_path / "my-documents"
+    d.mkdir()
+    (d / "taxes.pdf").write_text("x")
+    with pytest.raises(RuntimeError, match="not a sidekick home"):
+        lifecycle.delete(Home(d))
+    assert (d / "taxes.pdf").exists()
+
+
+def test_shred_never_follows_a_symlinked_keys_dir(keyed, tmp_path: Path):
+    home, _ = keyed
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "important.txt").write_text("keep me")
+    import shutil as _sh
+
+    _sh.rmtree(home.keys_dir)
+    home.keys_dir.symlink_to(victim)
+    keys.shred_keys(home)
+    assert (victim / "important.txt").read_text() == "keep me"
+
+
+def test_retire_needs_a_verified_move_archive(keyed, tmp_path: Path):
+    home, _ = keyed
+    out = lifecycle.move_out(home, tmp_path / "move.sksk")
+    out.unlink()
+    with pytest.raises(RuntimeError, match="move archive"):
+        lifecycle.retire(home)
+    assert home.root.exists()
+
+
+def test_cancel_move_makes_the_copy_live_again(keyed, tmp_path: Path):
+    home, _ = keyed
+    lifecycle.move_out(home, tmp_path / "move.sksk")
+    lifecycle.cancel_move(home)
+    lifecycle.require_live(home)
+    with pytest.raises(RuntimeError):
+        lifecycle.cancel_move(home)
+
+
+def test_reset_removes_every_search_index(keyed):
+    home, _ = keyed
+    (home.root / "index.db").write_text("x")
+    (home.soul_dir / "index.db").write_text("x")
+    lifecycle.reset(home, keep_settings=False, export_to=None)
+    assert not [p for p in home.root.rglob("index.db*") if "keys" not in p.parts]

@@ -59,3 +59,22 @@ def test_drill_records_an_unexpected_error(backed: Home, monkeypatch):
     monkeypatch.setattr(drill.archive, "import_archive", boom)
     res = drill.run_drill(backed)
     assert res["ok"] is False and "files" in res["error"]
+
+
+def test_drill_catches_a_backup_whose_recovery_key_is_damaged(backed: Home):
+    backup.run_backup(backed)
+    latest = backup.latest(backed)
+    with tarfile.open(latest) as t:
+        members = {n: t.extractfile(n).read() for n in t.getnames()}
+    b = bytearray(members["recovery.identity.age"])
+    b[len(b) // 2] ^= 0x01
+    members["recovery.identity.age"] = bytes(b)
+    import io as _io
+
+    with tarfile.open(latest, "w") as t:
+        for n, data in members.items():
+            info = tarfile.TarInfo(n)
+            info.size = len(data)
+            t.addfile(info, _io.BytesIO(data))
+    res = drill.run_drill(backed)
+    assert res["ok"] is False and "recovery key" in res["error"]

@@ -165,3 +165,44 @@ def test_export_failure_is_recorded(keyed: Home, tmp_path: Path, monkeypatch):
 @pytest.mark.parametrize("remote,expected", [("hub:", "hub:"), ("hub:dir", "hub:dir/"), ("hub:dir/", "hub:dir/")])
 def test_rclone_join(remote, expected):
     assert backup._join(remote, "f.sksk") == expected + "f.sksk"
+
+
+# review round 2 -------------------------------------------------------------
+
+
+@pytest.mark.parametrize("keep", [0, -1, "abc"])
+def test_bad_keep_is_refused_and_nothing_deleted(keyed: Home, tmp_path: Path, keep):
+    usb = tmp_path / "usb"
+    _dest(keyed, usb, keep=2)
+    backup.run_backup(keyed, now=T0)
+    cfg = backup.load_config(keyed)
+    cfg["keep"] = keep
+    backup.save_config(keyed, cfg)
+    res = backup.run_backup(keyed, now=T0 + dt.timedelta(days=1))
+    assert res[0]["ok"] is False and "keep" in res[0]["error"]
+    assert len(list(usb.iterdir())) == 1
+
+
+def test_missing_instance_is_recorded_not_raised(keyed: Home, tmp_path: Path):
+    _dest(keyed, tmp_path / "usb")
+    (keyed.state_dir / "instance.json").unlink()
+    res = backup.run_backup(keyed, now=T0)
+    assert res[0]["ok"] is False
+    assert backup.status(keyed, now=T0)["last_error"]
+
+
+def test_dir_copy_is_verified_at_the_destination(keyed: Home, tmp_path: Path, monkeypatch):
+    usb = tmp_path / "usb"
+    _dest(keyed, usb)
+    real_copy = backup.shutil.copyfile
+
+    def bad_copy(src, dst):
+        real_copy(src, dst)
+        data = bytearray(Path(dst).read_bytes())
+        data[len(data) // 2] ^= 0x01
+        Path(dst).write_bytes(bytes(data))
+
+    monkeypatch.setattr(backup.shutil, "copyfile", bad_copy)
+    res = backup.run_backup(keyed, now=T0)
+    assert res[0]["ok"] is False
+    assert list(usb.iterdir()) == []

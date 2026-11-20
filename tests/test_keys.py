@@ -32,9 +32,9 @@ def test_normalize_rejects_bad(bad):
         keys.normalize_phrase(bad)
 
 
-def test_create_keys_writes_three_files_and_no_phrase(story_home: Home):
+def test_create_keys_writes_four_files_and_no_phrase(story_home: Home):
     phrase = keys.create_keys(story_home)
-    assert sorted(p.name for p in story_home.keys_dir.iterdir()) == ["live.identity", "recipient.txt", "recovery.identity.age"]
+    assert sorted(p.name for p in story_home.keys_dir.iterdir()) == ["live.identity", "recipient.txt", "recovery.identity.age", "recovery.mac"]
     compact = phrase.replace("-", "")
     for f in story_home.root.rglob("*"):
         if f.is_file():
@@ -72,5 +72,5 @@ def test_unwrap_wrong_phrase_raises_wrong_phrase(story_home: Home):
 def test_shred_removes_all_key_files(story_home: Home):
     keys.create_keys(story_home)
     destroyed = keys.shred_keys(story_home)
-    assert sorted(destroyed) == ["live.identity", "recipient.txt", "recovery.identity.age"]
+    assert sorted(destroyed) == ["live.identity", "recipient.txt", "recovery.identity.age", "recovery.mac"]
     assert not any(story_home.keys_dir.iterdir())

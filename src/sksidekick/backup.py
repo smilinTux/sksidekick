@@ -11,6 +11,7 @@ import datetime as _dt
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import tempfile
@@ -69,14 +70,15 @@ def _join(remote: str, name: str) -> str:
     return f"{remote}{name}" if remote.endswith((":", "/")) else f"{remote}/{name}"
 
 
-def _to_dir(src: Path, dest: dict, name: str, keep: int, iid: str) -> None:
+def _to_dir(src: Path, dest: dict, name: str, keep: int, iid: str, identity) -> None:
     d = Path(dest["path"]).expanduser()
     d.mkdir(parents=True, exist_ok=True)
-    part = d / (name + ".part")
+    part = d / f"{name}.{secrets.token_hex(4)}.part"
     try:
         shutil.copyfile(src, part)
         with open(part, "rb") as f:
             keys.full_fsync(f.fileno())
+        archive.verify(part, identity)  # prove the copy that landed, not just the source
         os.replace(part, d / name)
     finally:
         if part.exists():
@@ -93,7 +95,7 @@ def _rclone(*args: str) -> subprocess.CompletedProcess:
     return proc
 
 
-def _to_rclone(src: Path, dest: dict, name: str, keep: int, iid: str) -> None:
+def _to_rclone(src: Path, dest: dict, name: str, keep: int, iid: str, identity) -> None:
     remote = dest["remote"]
     _rclone("copyto", str(src), _join(remote, name))
     listed = [n.strip() for n in _rclone("lsf", remote).stdout.splitlines()]
@@ -109,34 +111,45 @@ _WRITERS = {"dir": _to_dir, "rclone": _to_rclone}
 
 def run_backup(home: Home, *, now: _dt.datetime | None = None) -> list[dict]:
     now = now or _dt.datetime.now(_dt.timezone.utc)
-    cfg = load_config(home)
-    state = _load_state(home)
+    try:
+        state = _load_state(home)
+    except (OSError, ValueError):
+        state = {"last_success": None, "last_error": None, "results": []}
+
     def fail(msg: str) -> list[dict]:
         results = [{"destination": None, "ok": False, "error": msg}]
         state.update(last_error=msg, results=results)
         _save_state(home, state)
         return results
 
-    if not cfg["destinations"]:
+    try:
+        cfg = load_config(home)
+    except (OSError, ValueError) as exc:
+        return fail(f"backup settings unreadable: {exc}")
+    keep = cfg.get("keep")
+    if not isinstance(keep, int) or isinstance(keep, bool) or keep < 1:
+        return fail(f"backup setting keep must be a whole number of 1 or more, not {keep!r}; nothing was deleted")
+    if not cfg.get("destinations"):
         return fail(NO_DEST)
     try:
         lifecycle.require_live(home)
-    except RuntimeError as exc:
-        return fail(str(exc))
-    iid = home.instance()["instance_id"]
+        iid = home.instance()["instance_id"]
+        identity = keys.load_identity(home)
+    except (RuntimeError, OSError, ValueError, KeyError) as exc:
+        return fail(str(exc) or type(exc).__name__)
     name = f"sidekick-{iid}-{now.strftime('%Y%m%dT%H%M%SZ')}.sksk"
     results = []
     with tempfile.TemporaryDirectory(prefix="sksidekick-backup-") as tmp:
         try:
             src = archive.export(home, Path(tmp) / name, purpose="backup")
-            archive.verify(src, keys.load_identity(home))
+            archive.verify(src, identity)
         except (OSError, ValueError) as exc:
             return fail(f"could not make the backup: {exc}")
         for dest in cfg["destinations"]:
             try:
-                _WRITERS[dest["kind"]](src, dest, name, int(cfg["keep"]), iid)
+                _WRITERS[dest["kind"]](src, dest, name, keep, iid, identity)
                 results.append({"destination": _label(dest), "ok": True, "name": name})
-            except (OSError, KeyError, subprocess.SubprocessError) as exc:
+            except (OSError, KeyError, ValueError, subprocess.SubprocessError) as exc:
                 results.append({"destination": _label(dest), "ok": False, "error": str(exc) or type(exc).__name__})
     errors = [r["error"] for r in results if not r["ok"]]
     if any(r["ok"] for r in results):

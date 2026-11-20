@@ -31,6 +31,7 @@ def _cmd_init(home: Home, a) -> int:
         return 1
     for d in (home.memory_dir, home.soul_dir, home.config_dir):
         d.mkdir(parents=True, exist_ok=True)
+    os.chmod(home.root, 0o700)
     phrase = keys.create_keys(home)
     try:
         print("Your recovery phrase:\n")
@@ -122,8 +123,14 @@ def _cmd_retire(home: Home, a) -> int:
     if not a.yes:
         print("retire destroys this old copy. Re-run with --yes once the new place works.")
         return 2
-    res = lifecycle.retire(home)
+    res = lifecycle.retire(home, move_archive=Path(a.archive) if a.archive else None)
     print(f"old copy destroyed ({res['files_removed']} files).")
+    return 0
+
+
+def _cmd_move_cancel(home: Home, a) -> int:
+    lifecycle.cancel_move(home)
+    print("This copy answers again. If you already imported the move archive somewhere, delete that copy: only one may answer.")
     return 0
 
 
@@ -168,7 +175,9 @@ def _parser() -> argparse.ArgumentParser:
     m.set_defaults(fn=_cmd_move_out)
     t = sub.add_parser("retire", help="destroy the old copy after a move")
     t.add_argument("--yes", action="store_true")
+    t.add_argument("--archive", help="where the move archive is now, if you moved the file")
     t.set_defaults(fn=_cmd_retire)
+    sub.add_parser("move-cancel", help="undo move-out; this copy answers again").set_defaults(fn=_cmd_move_cancel)
     sub.add_parser("status", help="instance, backup and drill state").set_defaults(fn=_cmd_status)
     return p
 

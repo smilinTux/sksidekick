@@ -9,6 +9,12 @@ from pathlib import Path
 
 STATUSES = ("live", "moving", "retired")
 _NOT_STORY = ("keys", "state")
+STAGING_PREFIX = ".sksidekick-import-"
+
+
+def _skip(rel: Path) -> bool:
+    """Keys, state and an interrupted import's staging dir are never story."""
+    return rel.parts[0] in _NOT_STORY or rel.parts[0].startswith(STAGING_PREFIX)
 
 
 class Home:
@@ -49,7 +55,7 @@ class Home:
         out = []
         for p in self.root.rglob("*"):
             rel = p.relative_to(self.root)
-            if rel.parts[0] in _NOT_STORY or p.name.startswith("index.db"):
+            if _skip(rel) or p.name.startswith("index.db"):
                 continue
             if p.is_file() and not p.is_symlink():
                 out.append(rel)
@@ -62,15 +68,19 @@ class Home:
         out = []
         for p in self.root.rglob("*"):
             rel = p.relative_to(self.root)
-            if rel.parts[0] not in _NOT_STORY and p.is_symlink():
+            if not _skip(rel) and p.is_symlink():
                 out.append(rel)
         return sorted(out)
 
     def is_empty(self) -> bool:
-        """True when the home holds no file or link at all (empty directories are fine)."""
+        """True when the home holds no file or link at all (empty directories and a
+        leftover import staging dir are fine)."""
         if not self.root.exists():
             return True
-        return not any(p.is_file() or p.is_symlink() for p in self.root.rglob("*"))
+        return not any(
+            (p.is_file() or p.is_symlink()) and not p.relative_to(self.root).parts[0].startswith(STAGING_PREFIX)
+            for p in self.root.rglob("*")
+        )
 
     def _instance_path(self) -> Path:
         return self.state_dir / "instance.json"

@@ -8,6 +8,8 @@ phrase itself is never stored.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import os
 import secrets
 import shutil
@@ -24,10 +26,15 @@ LOOKALIKES = {"O": "0", "I": "1", "L": "1"}
 LIVE = "live.identity"
 WRAPPED = "recovery.identity.age"
 RECIPIENT = "recipient.txt"
+WRAPPED_MAC = "recovery.mac"
 
 
 class WrongPhrase(ValueError):
     """The recovery phrase does not open this key."""
+
+
+class KeyDamaged(ValueError):
+    """The phrase-wrapped recovery key on this device no longer matches the key it was made from."""
 
 
 def generate_phrase() -> str:
@@ -77,6 +84,28 @@ def install_identity(home: Home, identity: x25519.Identity, wrapped: bytes) -> N
     _write_private(home.keys_dir / LIVE, str(identity).encode())
     _write_private(home.keys_dir / WRAPPED, wrapped)
     _write_private(home.keys_dir / RECIPIENT, str(identity.to_public()).encode())
+    _write_private(home.keys_dir / WRAPPED_MAC, wrapped_mac(identity, wrapped).encode())
+
+
+def wrapped_mac(identity: x25519.Identity, wrapped: bytes) -> str:
+    """HMAC of the wrapped key under the live key, so damage to it is caught before it is ever needed."""
+    k = hashlib.sha256(b"sksidekick wrapped key mac\0" + str(identity).encode()).digest()
+    return hmac.new(k, wrapped, hashlib.sha256).hexdigest()
+
+
+def checked_wrapped(home: Home) -> bytes:
+    """The wrapped recovery key, after proving it is the one made with this sidekick's key."""
+    wrapped = (home.keys_dir / WRAPPED).read_bytes()
+    try:
+        stored = (home.keys_dir / WRAPPED_MAC).read_text().strip()
+    except FileNotFoundError as exc:
+        raise KeyDamaged("the recovery key check file is missing; run sksidekick verify on a recent archive") from exc
+    if not hmac.compare_digest(stored.encode(), wrapped_mac(load_identity(home), wrapped).encode()):
+        raise KeyDamaged(
+            "the recovery key on this device is damaged, so the phrase could not restore new archives. "
+            "Restore keys/ from a known good archive before making more backups."
+        )
+    return wrapped
 
 
 def create_keys(home: Home) -> str:
@@ -109,6 +138,9 @@ def unwrap_identity(wrapped: bytes, phrase: str) -> x25519.Identity:
 def shred_keys(home: Home) -> list[str]:
     """Overwrite and remove every key file. Returns the names destroyed."""
     destroyed = []
+    if home.keys_dir.is_symlink():  # never shred whatever a link points at
+        home.keys_dir.unlink()
+        return destroyed
     if not home.keys_dir.is_dir():
         return destroyed
     for p in sorted(home.keys_dir.iterdir()):

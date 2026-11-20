@@ -25,6 +25,7 @@ def run_drill(home: Home) -> dict:
         try:
             with tempfile.TemporaryDirectory(prefix="sksidekick-drill-") as tmp:
                 scratch = Home(Path(tmp) / "home")
+                keys.checked_wrapped(home)  # the local recovery key must still be sound too
                 manifest = archive.import_archive(latest, scratch, identity=keys.load_identity(home))
                 restored = len(scratch.story_paths())
                 if restored != len(manifest["files"]):

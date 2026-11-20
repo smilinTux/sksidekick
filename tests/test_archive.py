@@ -347,3 +347,101 @@ def test_purpose_is_recorded(keyed, tmp_path: Path):
     a = archive.export(home, tmp_path / "out.sksk", purpose="backup")
     m = archive.import_archive(a, Home(tmp_path / "r"), phrase=phrase)
     assert m["purpose"] == "backup"
+
+
+# review round 2 -------------------------------------------------------------
+
+
+def _flip_member(a: Path, member: str) -> None:
+    with tarfile.open(a) as t:
+        members = {n: t.extractfile(n).read() for n in t.getnames()}
+    b = bytearray(members[member])
+    b[len(b) // 2] ^= 0x01
+    members[member] = bytes(b)
+    _write_outer(a, members)
+
+
+def test_corrupted_recovery_key_in_archive_fails_verify(keyed, tmp_path: Path):
+    home, _ = keyed
+    a = archive.export(home, tmp_path / "out.sksk")
+    _flip_member(a, "recovery.identity.age")
+    with pytest.raises(archive.ArchiveDamaged, match="recovery key"):
+        archive.verify(a, keys.load_identity(home))
+
+
+def test_local_recovery_key_corruption_is_caught_before_export(keyed, tmp_path: Path):
+    home, _ = keyed
+    p = home.keys_dir / keys.WRAPPED
+    b = bytearray(p.read_bytes())
+    b[len(b) // 2] ^= 0x01
+    p.write_bytes(bytes(b))
+    with pytest.raises(keys.KeyDamaged):
+        archive.export(home, tmp_path / "out.sksk")
+
+
+@pytest.mark.parametrize("mac", ["é", 5, None, "ab"])
+def test_hostile_mac_values_are_refused_cleanly(keyed, tmp_path: Path, mac):
+    home, _ = keyed
+    a = archive.export(home, tmp_path / "out.sksk")
+    with tarfile.open(a) as t:
+        members = {n: t.extractfile(n).read() for n in t.getnames()}
+    m = json.loads(members["manifest.json"])
+    m["mac"] = mac
+    members["manifest.json"] = json.dumps(m).encode()
+    _write_outer(a, members)
+    with pytest.raises(archive.ArchiveDamaged):
+        archive.verify(a, keys.load_identity(home))
+
+
+def test_import_into_a_symlinked_empty_home(keyed, tmp_path: Path):
+    home, phrase = keyed
+    a = archive.export(home, tmp_path / "out.sksk")
+    real = tmp_path / "real-home"
+    real.mkdir()
+    link = tmp_path / "home-link"
+    link.symlink_to(real)
+    archive.import_archive(a, Home(link), phrase=phrase)
+    assert _story(Home(real)) == _story(home)
+
+
+@pytest.mark.skipif(__import__("os").geteuid() == 0, reason="root ignores permissions")
+def test_import_into_existing_home_under_a_read_only_parent(keyed, tmp_path: Path):
+    import os
+
+    home, phrase = keyed
+    a = archive.export(home, tmp_path / "out.sksk")
+    parent = tmp_path / "ro"
+    (parent / "home").mkdir(parents=True)
+    os.chmod(parent, 0o500)
+    try:
+        archive.import_archive(a, Home(parent / "home"), phrase=phrase)
+        assert _story(Home(parent / "home")) == _story(home)
+    finally:
+        os.chmod(parent, 0o700)
+
+
+def test_leftover_import_staging_does_not_block_a_retry(keyed, tmp_path: Path):
+    home, phrase = keyed
+    a = archive.export(home, tmp_path / "out.sksk")
+    target = Home(tmp_path / "restored")
+    stale = target.root / ".sksidekick-import-dead"
+    stale.mkdir(parents=True)
+    (stale / "half.json").write_text("{}")
+    assert target.is_empty()
+    archive.import_archive(a, target, phrase=phrase)
+    assert not stale.exists()
+    assert _story(target) == _story(home)
+
+
+def test_unicode_normalization_duplicate_refused(keyed, tmp_path: Path):
+    home, _ = keyed
+
+    def add(t):
+        for n in ("story/memory/café.json", "story/memory/café.json"):
+            info = tarfile.TarInfo(n)
+            info.size = 1
+            t.addfile(info, io.BytesIO(b"x"))
+
+    a = _evil_archive(home, tmp_path / "evil.sksk", add)
+    with pytest.raises(archive.ArchiveDamaged, match="duplicate"):
+        archive.verify(a, keys.load_identity(home))

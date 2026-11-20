@@ -106,3 +106,20 @@ def test_destructive_commands_need_yes(capsys, tmp_path: Path, cmd):
     root = tmp_path / "sk"
     _init(capsys, root)
     assert run(capsys, "--home", str(root), *cmd)[0] == 2
+
+
+def test_init_home_is_private(capsys, tmp_path: Path):
+    import stat
+
+    root = tmp_path / "sk"
+    _init(capsys, root)
+    assert stat.S_IMODE(root.stat().st_mode) == 0o700
+
+
+def test_move_cancel_command(capsys, tmp_path: Path):
+    root = tmp_path / "sk"
+    _init(capsys, root)
+    assert run(capsys, "--home", str(root), "move-out", str(tmp_path / "m.sksk"))[0] == 0
+    assert run(capsys, "--home", str(root), "move-cancel")[0] == 0
+    code, out = run(capsys, "--home", str(root), "status")
+    assert json.loads(out)["instance"]["status"] == "live"
