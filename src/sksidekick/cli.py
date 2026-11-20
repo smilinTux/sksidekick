@@ -32,10 +32,14 @@ def _cmd_init(home: Home, a) -> int:
     for d in (home.memory_dir, home.soul_dir, home.config_dir):
         d.mkdir(parents=True, exist_ok=True)
     phrase = keys.create_keys(home)
+    try:
+        print("Your recovery phrase:\n")
+        print(f"    {phrase}\n")
+        print("Write this down. It is the only way to restore your sidekick.", flush=True)
+    except BaseException:
+        keys.shred_keys(home)  # a phrase nobody saw would make every archive unrecoverable
+        raise
     home.new_instance()
-    print("Your recovery phrase:\n")
-    print(f"    {phrase}\n")
-    print("Write this down. It is the only way to restore your sidekick.")
     return 0
 
 
@@ -57,6 +61,8 @@ def _cmd_verify(home: Home, a) -> int:
 def _cmd_import(home: Home, a) -> int:
     m = archive.import_archive(Path(a.path), home, phrase=_phrase_from_stdin())
     print(f"restored {len(m['files'])} files into {home.root}")
+    if m.get("purpose") != "move":
+        print("This was a backup or export, not a move. If the original sidekick is still running, stop it: only one copy may answer.")
     return 0
 
 
@@ -175,7 +181,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         return a.fn(Home(root), a)
-    except (keys.WrongPhrase, archive.ArchiveDamaged, FileExistsError, RuntimeError, ValueError) as exc:
+    except (keys.WrongPhrase, archive.ArchiveDamaged, RuntimeError, ValueError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 

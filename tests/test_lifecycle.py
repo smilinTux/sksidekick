@@ -61,12 +61,8 @@ def test_delete_removes_everything_and_reports(keyed):
 
 def test_delete_notice_text_exact(keyed):
     home, _ = keyed
-    assert lifecycle.delete(home)["notice"] == (
-        "Your sidekick's keys are destroyed, so its memory and every backup made with them can no longer be "
-        "opened by anyone holding only those files. Destroy any printed recovery phrase and any plain exports "
-        "you made: the sidekick cannot reach those. Outside channels such as Telegram or Slack keep their own "
-        "copy of your conversations."
-    )
+    assert lifecycle.delete(home)["notice"] == lifecycle.NOTICE
+    assert "SSD" in lifecycle.NOTICE and "recovery phrase" in lifecycle.NOTICE
 
 
 def test_backup_unreadable_after_delete(keyed, tmp_path: Path):
@@ -98,3 +94,49 @@ def test_retire_requires_moving(keyed, tmp_path: Path):
     lifecycle.move_out(home, tmp_path / "move.sksk")
     assert lifecycle.retire(home)["keys_destroyed"]
     assert not home.root.exists()
+
+
+# review round 1 -------------------------------------------------------------
+
+
+def test_reset_removes_the_search_index(keyed):
+    home, _ = keyed
+    (home.memory_dir / "index.db").write_text("fts of every memory")
+    (home.memory_dir / "index.db-wal").write_text("x")
+    lifecycle.reset(home, keep_settings=False, export_to=None)
+    assert not list(home.memory_dir.glob("index.db*")) if home.memory_dir.exists() else True
+
+
+def test_delete_through_a_symlinked_home(keyed, tmp_path: Path):
+    home, _ = keyed
+    link = tmp_path / "link-home"
+    link.symlink_to(home.root)
+    res = lifecycle.delete(Home(link))
+    assert res["keys_destroyed"]
+    assert not home.root.exists() and not link.exists() and not link.is_symlink()
+
+
+def test_move_out_failure_keeps_the_copy_live(keyed, tmp_path: Path, monkeypatch):
+    home, _ = keyed
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(lifecycle.archive, "export", boom)
+    with pytest.raises(OSError):
+        lifecycle.move_out(home, tmp_path / "move.sksk")
+    assert home.instance()["status"] == "live"
+
+
+def test_move_out_marks_moving_before_the_archive_exists(keyed, tmp_path: Path, monkeypatch):
+    home, _ = keyed
+    seen = []
+    real = lifecycle.archive.export
+
+    def spy(h, dest, **kw):
+        seen.append(h.instance()["status"])
+        return real(h, dest, **kw)
+
+    monkeypatch.setattr(lifecycle.archive, "export", spy)
+    lifecycle.move_out(home, tmp_path / "move.sksk")
+    assert seen == ["moving"]

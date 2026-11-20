@@ -9,10 +9,11 @@ from sksidekick import archive, keys
 from sksidekick.home import Home
 
 NOTICE = (
-    "Your sidekick's keys are destroyed, so its memory and every backup made with them can no longer be "
-    "opened by anyone holding only those files. Destroy any printed recovery phrase and any plain exports "
-    "you made: the sidekick cannot reach those. Outside channels such as Telegram or Slack keep their own "
-    "copy of your conversations."
+    "Your sidekick's keys are destroyed and its files on this device are removed. Backups and archives made with "
+    "those keys can no longer be opened by anyone who has only those files. Destroy any printed recovery phrase and "
+    "any plain exports you made: the sidekick cannot reach those. Outside channels such as Telegram or Slack keep "
+    "their own copy of your conversations. On SSDs and Macs the disk can keep traces of removed files until they are "
+    "overwritten, so erase the disk before you give the device away."
 )
 
 
@@ -27,6 +28,9 @@ def reset(home: Home, *, keep_settings: bool, export_to: Path | None) -> dict:
     planned = plan_reset(home, keep_settings=keep_settings)
     for rel in planned:
         (home.root / rel).unlink()
+    if home.memory_dir.is_dir():
+        for idx in home.memory_dir.rglob("index.db*"):
+            idx.unlink()
     for d in (home.memory_dir, home.soul_dir, home.config_dir):
         if d.is_dir():
             for sub in sorted((p for p in d.rglob("*") if p.is_dir()), reverse=True):
@@ -36,11 +40,19 @@ def reset(home: Home, *, keep_settings: bool, export_to: Path | None) -> dict:
 
 
 def delete(home: Home) -> dict:
-    """Permanently delete: destroy the keys first (crypto-shred), then every file."""
-    destroyed = keys.shred_keys(home)
-    count = sum(1 for p in home.root.rglob("*") if p.is_file() or p.is_symlink()) if home.root.exists() else 0
-    if home.root.exists():
-        shutil.rmtree(home.root)
+    """Permanently delete: destroy the keys first (crypto-shred), then every file.
+
+    A home reached through a symlink is deleted at its real location, then the link.
+    """
+    link = home.root if home.root.is_symlink() else None
+    real = Home(home.root.resolve()) if home.root.exists() else home
+    destroyed = keys.shred_keys(real)
+    count = 0
+    if real.root.exists():
+        count = sum(1 for p in real.root.rglob("*") if p.is_file() or p.is_symlink())
+        shutil.rmtree(real.root)
+    if link is not None:
+        link.unlink()
     return {"keys_destroyed": destroyed, "files_removed": count, "notice": NOTICE}
 
 
@@ -50,11 +62,14 @@ def require_live(home: Home) -> None:
 
 
 def move_out(home: Home, dest: Path) -> Path:
-    """Pack the sidekick for a move. This copy stops being live straight away."""
+    """Pack the sidekick for a move. This copy stops being live BEFORE the archive exists."""
     require_live(home)
-    out = archive.export(home, Path(dest))
     home.set_status("moving")
-    return out
+    try:
+        return archive.export(home, Path(dest), purpose="move")
+    except BaseException:
+        home.set_status("live")
+        raise
 
 
 def retire(home: Home) -> dict:

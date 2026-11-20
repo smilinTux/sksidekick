@@ -30,8 +30,8 @@ def run_drill(home: Home) -> dict:
                 if restored != len(manifest["files"]):
                     raise archive.ArchiveDamaged(f"restored {restored} files, manifest lists {len(manifest['files'])}")
                 result.update(ok=True, files=restored)
-        except (archive.ArchiveDamaged, OSError) as exc:
-            result["error"] = str(exc)
+        except Exception as exc:  # a drill records every failure; it never crashes the caller
+            result["error"] = f"{type(exc).__name__}: {exc}"
     home.state_dir.mkdir(parents=True, exist_ok=True)
     _path(home).write_text(json.dumps(result, indent=1))
     return result

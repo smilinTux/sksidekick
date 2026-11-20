@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import stat
 import tarfile
 from pathlib import Path
 
@@ -118,7 +119,7 @@ def _evil_archive(home: Home, path: Path, add) -> Path:
         info.size = len(data)
         t.addfile(info, io.BytesIO(data))
     wrapped = (home.keys_dir / keys.WRAPPED).read_bytes()
-    archive._write_envelope(path, buf.getvalue(), keys.recipient(home), wrapped)
+    archive._write_envelope(path, buf.getvalue(), keys.recipient(home), wrapped, identity=keys.load_identity(home))
     return path
 
 
@@ -198,3 +199,151 @@ def test_plain_export_refuses_existing_dir(keyed, tmp_path: Path):
     (tmp_path / "plain").mkdir()
     with pytest.raises(FileExistsError):
         archive.export_plain(home, tmp_path / "plain")
+
+
+# review round 1 -------------------------------------------------------------
+
+
+def test_export_refuses_symlinks(keyed, tmp_path: Path):
+    home, _ = keyed
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "x.json").write_text("{}")
+    (home.memory_dir / "linked").symlink_to(other)
+    with pytest.raises(archive.StoryError, match="symlink"):
+        archive.export(home, tmp_path / "out.sksk")
+    assert not (tmp_path / "out.sksk").exists()
+
+
+def test_forged_archive_with_real_wrapped_key_is_refused(keyed, tmp_path: Path):
+    """A backup host knows the public recipient and holds a real wrapped key: it still cannot forge."""
+    home, phrase = keyed
+    real = archive.export(home, tmp_path / "real.sksk")
+    with tarfile.open(real) as t:
+        wrapped = t.extractfile("recovery.identity.age").read()
+        manifest = json.loads(t.extractfile("manifest.json").read())
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as t:
+        data = b"forged memory"
+        files = {"memory/long-term/evil.json": __import__("hashlib").sha256(data).hexdigest()}
+        info = tarfile.TarInfo("story/memory/long-term/evil.json")
+        info.size = len(data)
+        t.addfile(info, io.BytesIO(data))
+        inner = json.dumps({"format": archive.FORMAT, "created": "x", "instance_id": "x", "files": files}).encode()
+        info = tarfile.TarInfo("inner-manifest.json")
+        info.size = len(inner)
+        t.addfile(info, io.BytesIO(inner))
+    import pyrage, hashlib
+
+    payload = pyrage.encrypt(buf.getvalue(), [x25519.Recipient.from_str(manifest["recipient"])])
+    manifest["payload_sha256"] = hashlib.sha256(payload).hexdigest()
+    forged = tmp_path / "forged.sksk"
+    _write_outer(forged, {"manifest.json": json.dumps(manifest).encode(), "recovery.identity.age": wrapped, "payload.age": payload})
+    with pytest.raises(archive.ArchiveDamaged, match="not made by this sidekick"):
+        archive.verify(forged, keys.load_identity(home))
+    target = Home(tmp_path / "restored")
+    with pytest.raises(archive.ArchiveDamaged):
+        archive.import_archive(forged, target, phrase=phrase)
+    assert not target.root.exists()
+
+
+@pytest.mark.parametrize("name", ["story/keys/live.identity", "story/state/instance.json", "story/memory/index.db"])
+def test_member_into_keys_state_or_index_refused(keyed, tmp_path: Path, name):
+    home, _ = keyed
+
+    def add(t):
+        info = tarfile.TarInfo(name)
+        info.size = 1
+        t.addfile(info, io.BytesIO(b"x"))
+
+    a = _evil_archive(home, tmp_path / "evil.sksk", add)
+    target = Home(tmp_path / "restored")
+    with pytest.raises(archive.ArchiveDamaged):
+        archive.import_archive(a, target, identity=keys.load_identity(home))
+    assert not target.root.exists()
+
+
+def test_case_insensitive_duplicate_refused(keyed, tmp_path: Path):
+    home, _ = keyed
+
+    def add(t):
+        for n in ("story/memory/a.json", "story/Memory/a.json"):
+            info = tarfile.TarInfo(n)
+            info.size = 1
+            t.addfile(info, io.BytesIO(b"x"))
+
+    a = _evil_archive(home, tmp_path / "evil.sksk", add)
+    with pytest.raises(archive.ArchiveDamaged, match="duplicate"):
+        archive.verify(a, keys.load_identity(home))
+
+
+def test_oversized_story_refused(keyed, tmp_path: Path, monkeypatch):
+    home, _ = keyed
+    a = archive.export(home, tmp_path / "out.sksk")
+    monkeypatch.setattr(archive, "MAX_STORY_BYTES", 10)
+    with pytest.raises(archive.ArchiveDamaged, match="too large"):
+        archive.verify(a, keys.load_identity(home))
+
+
+def test_manifest_not_an_object_is_damaged(keyed, tmp_path: Path):
+    home, _ = keyed
+    a = archive.export(home, tmp_path / "out.sksk")
+    with tarfile.open(a) as t:
+        members = {n: t.extractfile(n).read() for n in t.getnames()}
+    members["manifest.json"] = b"[1, 2]"
+    _write_outer(a, members)
+    with pytest.raises(archive.ArchiveDamaged):
+        archive.verify(a, keys.load_identity(home))
+
+
+def test_import_into_home_holding_only_an_index_refuses(keyed, tmp_path: Path):
+    home, phrase = keyed
+    a = archive.export(home, tmp_path / "out.sksk")
+    target = Home(tmp_path / "restored")
+    target.memory_dir.mkdir(parents=True)
+    (target.memory_dir / "index.db").write_text("x")
+    with pytest.raises(FileExistsError):
+        archive.import_archive(a, target, phrase=phrase)
+
+
+def test_import_into_existing_empty_dir_works(keyed, tmp_path: Path):
+    home, phrase = keyed
+    a = archive.export(home, tmp_path / "out.sksk")
+    target = Home(tmp_path / "restored")
+    (target.root / "memory").mkdir(parents=True)
+    archive.import_archive(a, target, phrase=phrase)
+    assert _story(target) == _story(home)
+
+
+def test_restored_files_are_private(keyed, tmp_path: Path):
+    home, phrase = keyed
+    a = archive.export(home, tmp_path / "out.sksk")
+    target = Home(tmp_path / "restored")
+    archive.import_archive(a, target, phrase=phrase)
+    assert stat.S_IMODE(target.root.stat().st_mode) == 0o700
+    for rel in target.story_paths():
+        assert stat.S_IMODE((target.root / rel).stat().st_mode) == 0o600
+
+
+def test_plain_export_is_private(keyed, tmp_path: Path):
+    home, _ = keyed
+    archive.export_plain(home, tmp_path / "plain")
+    assert stat.S_IMODE((tmp_path / "plain").stat().st_mode) == 0o700
+    for p in (tmp_path / "plain").rglob("*"):
+        if p.is_file():
+            assert stat.S_IMODE(p.stat().st_mode) == 0o600
+
+
+def test_export_refuses_existing_dest(keyed, tmp_path: Path):
+    home, _ = keyed
+    (tmp_path / "out.sksk").write_text("someone else's file")
+    with pytest.raises(FileExistsError):
+        archive.export(home, tmp_path / "out.sksk")
+    assert (tmp_path / "out.sksk").read_text() == "someone else's file"
+
+
+def test_purpose_is_recorded(keyed, tmp_path: Path):
+    home, phrase = keyed
+    a = archive.export(home, tmp_path / "out.sksk", purpose="backup")
+    m = archive.import_archive(a, Home(tmp_path / "r"), phrase=phrase)
+    assert m["purpose"] == "backup"

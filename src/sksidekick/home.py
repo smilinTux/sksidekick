@@ -55,9 +55,22 @@ class Home:
                 out.append(rel)
         return sorted(out)
 
+    def symlinks(self) -> list[Path]:
+        """Story-area symlinks. Export refuses them rather than silently leaving their targets out."""
+        if not self.root.is_dir():
+            return []
+        out = []
+        for p in self.root.rglob("*"):
+            rel = p.relative_to(self.root)
+            if rel.parts[0] not in _NOT_STORY and p.is_symlink():
+                out.append(rel)
+        return sorted(out)
+
     def is_empty(self) -> bool:
-        keys = self.keys_dir.is_dir() and any(self.keys_dir.iterdir())
-        return not self.story_paths() and not keys
+        """True when the home holds no file or link at all (empty directories are fine)."""
+        if not self.root.exists():
+            return True
+        return not any(p.is_file() or p.is_symlink() for p in self.root.rglob("*"))
 
     def _instance_path(self) -> Path:
         return self.state_dir / "instance.json"

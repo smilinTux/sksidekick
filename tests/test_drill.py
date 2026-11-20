@@ -48,3 +48,14 @@ def test_drill_leaves_no_temp_dir(backed: Home, tmp_path: Path, monkeypatch):
     backup.run_backup(backed)
     assert drill.run_drill(backed)["ok"] is True
     assert list(scratch.iterdir()) == []
+
+
+def test_drill_records_an_unexpected_error(backed: Home, monkeypatch):
+    backup.run_backup(backed)
+
+    def boom(*a, **k):
+        raise KeyError("files")
+
+    monkeypatch.setattr(drill.archive, "import_archive", boom)
+    res = drill.run_drill(backed)
+    assert res["ok"] is False and "files" in res["error"]

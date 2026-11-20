@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import secrets
+import shutil
 
 import pyrage
 from pyrage import passphrase, x25519
@@ -46,12 +47,25 @@ def normalize_phrase(phrase: str) -> str:
     return _group(chars)
 
 
+def full_fsync(fd: int) -> None:
+    """fsync that really reaches the disk on macOS too (F_FULLFSYNC)."""
+    import fcntl
+
+    if hasattr(fcntl, "F_FULLFSYNC"):
+        try:
+            fcntl.fcntl(fd, fcntl.F_FULLFSYNC)
+            return
+        except OSError:
+            pass
+    os.fsync(fd)
+
+
 def _write_private(path, data: bytes) -> None:
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "wb") as f:
         f.write(data)
         f.flush()
-        os.fsync(f.fileno())
+        full_fsync(f.fileno())
 
 
 def install_identity(home: Home, identity: x25519.Identity, wrapped: bytes) -> None:
@@ -98,12 +112,23 @@ def shred_keys(home: Home) -> list[str]:
     if not home.keys_dir.is_dir():
         return destroyed
     for p in sorted(home.keys_dir.iterdir()):
-        if p.is_file() and not p.is_symlink():
-            size = p.stat().st_size
-            with open(p, "r+b") as f:
-                f.write(secrets.token_bytes(max(size, 1)))
-                f.flush()
-                os.fsync(f.fileno())
-        p.unlink()
+        if p.is_symlink():
+            p.unlink()
+        elif p.is_dir():
+            for f in p.rglob("*"):
+                if f.is_file() and not f.is_symlink():
+                    _overwrite(f)
+            shutil.rmtree(p)
+        else:
+            _overwrite(p)
+            p.unlink()
         destroyed.append(p.name)
     return destroyed
+
+
+def _overwrite(p) -> None:
+    size = p.stat().st_size
+    with open(p, "r+b") as f:
+        f.write(secrets.token_bytes(max(size, 1)))
+        f.flush()
+        full_fsync(f.fileno())

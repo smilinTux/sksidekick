@@ -118,3 +118,50 @@ def test_latest_returns_newest(keyed: Home, tmp_path: Path):
     backup.run_backup(keyed, now=T0)
     backup.run_backup(keyed, now=T0 + dt.timedelta(days=1))
     assert backup.latest(keyed).name.endswith("20261121T120000Z.sksk")
+
+
+# review round 1 -------------------------------------------------------------
+
+
+def test_rotation_after_a_new_instance_keeps_the_new_backup(keyed: Home, tmp_path: Path):
+    usb = tmp_path / "usb"
+    _dest(keyed, usb, keep=3)
+    import json as _json
+
+    st = _json.loads((keyed.state_dir / "instance.json").read_text())
+    st["instance_id"] = "ffffffffffffffff"
+    (keyed.state_dir / "instance.json").write_text(_json.dumps(st))
+    for i in range(3):
+        backup.run_backup(keyed, now=T0 + dt.timedelta(days=i))
+    st["instance_id"] = "0000aaaa0000aaaa"
+    (keyed.state_dir / "instance.json").write_text(_json.dumps(st))
+    backup.run_backup(keyed, now=T0 + dt.timedelta(days=5))
+    names = sorted(f.name for f in usb.iterdir())
+    assert "sidekick-0000aaaa0000aaaa-20261125T120000Z.sksk" in names
+    assert len([n for n in names if "ffff" in n]) == 3
+    assert backup.latest(keyed).name == "sidekick-0000aaaa0000aaaa-20261125T120000Z.sksk"
+
+
+def test_backup_refused_when_not_live(keyed: Home, tmp_path: Path):
+    _dest(keyed, tmp_path / "usb")
+    keyed.set_status("moving")
+    res = backup.run_backup(keyed, now=T0)
+    assert res[0]["ok"] is False and "not the live sidekick" in res[0]["error"]
+    assert not (tmp_path / "usb").exists()
+
+
+def test_export_failure_is_recorded(keyed: Home, tmp_path: Path, monkeypatch):
+    _dest(keyed, tmp_path / "usb")
+
+    def boom(*a, **k):
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr(backup.archive, "export", boom)
+    res = backup.run_backup(keyed, now=T0)
+    assert res[0]["ok"] is False and "No space" in res[0]["error"]
+    assert "No space" in backup.status(keyed, now=T0)["last_error"]
+
+
+@pytest.mark.parametrize("remote,expected", [("hub:", "hub:"), ("hub:dir", "hub:dir/"), ("hub:dir/", "hub:dir/")])
+def test_rclone_join(remote, expected):
+    assert backup._join(remote, "f.sksk") == expected + "f.sksk"

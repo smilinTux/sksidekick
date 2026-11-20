@@ -41,3 +41,17 @@ def test_set_status_rejects_unknown(story_home: Home):
     story_home.new_instance()
     with pytest.raises(ValueError):
         story_home.set_status("paused")
+
+
+def test_symlinks_are_reported(story_home: Home, tmp_path):
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "m.json").write_text("{}")
+    (story_home.memory_dir / "linked").symlink_to(elsewhere)
+    assert [str(p) for p in story_home.symlinks()] == ["memory/linked"]
+
+
+def test_is_not_empty_with_only_an_index(bare_home: Home):
+    bare_home.memory_dir.mkdir(parents=True)
+    (bare_home.memory_dir / "index.db").write_text("x")
+    assert not bare_home.is_empty()

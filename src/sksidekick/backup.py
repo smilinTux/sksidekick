@@ -16,12 +16,12 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from sksidekick import archive, keys
+from sksidekick import archive, keys, lifecycle
 from sksidekick.home import Home
 
 DEFAULTS = {"destinations": [], "keep": 7, "interval_hours": 24}
 NO_DEST = "no backup destination configured"
-_NAME = re.compile(r"^sidekick-[0-9a-f]+-\d{8}T\d{6}Z\.sksk$")
+_NAME = re.compile(r"^sidekick-(?P<iid>[0-9a-f]+)-(?P<ts>\d{8}T\d{6}Z)\.sksk$")
 
 
 def _config_path(home: Home) -> Path:
@@ -59,21 +59,31 @@ def _label(dest: dict) -> str:
     return dest.get("path") or dest.get("remote") or "?"
 
 
-def _to_dir(src: Path, dest: dict, name: str, keep: int) -> None:
+def _ours(names, iid: str) -> list[str]:
+    """This instance's backups, oldest first (by timestamp, never by instance id)."""
+    hits = [(m.group("ts"), n) for n in names if (m := _NAME.match(n)) and m.group("iid") == iid]
+    return [n for _, n in sorted(hits)]
+
+
+def _join(remote: str, name: str) -> str:
+    return f"{remote}{name}" if remote.endswith((":", "/")) else f"{remote}/{name}"
+
+
+def _to_dir(src: Path, dest: dict, name: str, keep: int, iid: str) -> None:
     d = Path(dest["path"]).expanduser()
     d.mkdir(parents=True, exist_ok=True)
     part = d / (name + ".part")
     try:
         shutil.copyfile(src, part)
         with open(part, "rb") as f:
-            os.fsync(f.fileno())
+            keys.full_fsync(f.fileno())
         os.replace(part, d / name)
     finally:
         if part.exists():
             part.unlink()
-    ours = sorted(p for p in d.iterdir() if _NAME.match(p.name))
+    ours = _ours((p.name for p in d.iterdir()), iid)
     for old in ours[: max(len(ours) - keep, 0)]:
-        old.unlink()
+        (d / old).unlink()
 
 
 def _rclone(*args: str) -> subprocess.CompletedProcess:
@@ -83,15 +93,15 @@ def _rclone(*args: str) -> subprocess.CompletedProcess:
     return proc
 
 
-def _to_rclone(src: Path, dest: dict, name: str, keep: int) -> None:
-    remote = dest["remote"].rstrip("/")
-    _rclone("copyto", str(src), f"{remote}/{name}")
+def _to_rclone(src: Path, dest: dict, name: str, keep: int, iid: str) -> None:
+    remote = dest["remote"]
+    _rclone("copyto", str(src), _join(remote, name))
     listed = [n.strip() for n in _rclone("lsf", remote).stdout.splitlines()]
     if name not in listed:
         raise OSError("rclone copy did not appear at the destination")
-    ours = sorted(n for n in listed if _NAME.match(n))
+    ours = _ours(listed, iid)
     for old in ours[: max(len(ours) - keep, 0)]:
-        _rclone("deletefile", f"{remote}/{old}")
+        _rclone("deletefile", _join(remote, old))
 
 
 _WRITERS = {"dir": _to_dir, "rclone": _to_rclone}
@@ -101,19 +111,30 @@ def run_backup(home: Home, *, now: _dt.datetime | None = None) -> list[dict]:
     now = now or _dt.datetime.now(_dt.timezone.utc)
     cfg = load_config(home)
     state = _load_state(home)
-    if not cfg["destinations"]:
-        results = [{"destination": None, "ok": False, "error": NO_DEST}]
-        state.update(last_error=NO_DEST, results=results)
+    def fail(msg: str) -> list[dict]:
+        results = [{"destination": None, "ok": False, "error": msg}]
+        state.update(last_error=msg, results=results)
         _save_state(home, state)
         return results
-    name = f"sidekick-{home.instance()['instance_id']}-{now.strftime('%Y%m%dT%H%M%SZ')}.sksk"
+
+    if not cfg["destinations"]:
+        return fail(NO_DEST)
+    try:
+        lifecycle.require_live(home)
+    except RuntimeError as exc:
+        return fail(str(exc))
+    iid = home.instance()["instance_id"]
+    name = f"sidekick-{iid}-{now.strftime('%Y%m%dT%H%M%SZ')}.sksk"
     results = []
     with tempfile.TemporaryDirectory(prefix="sksidekick-backup-") as tmp:
-        src = archive.export(home, Path(tmp) / name)
-        archive.verify(src, keys.load_identity(home))
+        try:
+            src = archive.export(home, Path(tmp) / name, purpose="backup")
+            archive.verify(src, keys.load_identity(home))
+        except (OSError, ValueError) as exc:
+            return fail(f"could not make the backup: {exc}")
         for dest in cfg["destinations"]:
             try:
-                _WRITERS[dest["kind"]](src, dest, name, int(cfg["keep"]))
+                _WRITERS[dest["kind"]](src, dest, name, int(cfg["keep"]), iid)
                 results.append({"destination": _label(dest), "ok": True, "name": name})
             except (OSError, KeyError, subprocess.SubprocessError) as exc:
                 results.append({"destination": _label(dest), "ok": False, "error": str(exc) or type(exc).__name__})
@@ -135,9 +156,11 @@ def status(home: Home, *, now: _dt.datetime | None = None) -> dict:
 
 
 def latest(home: Home) -> Path | None:
+    """This instance's newest backup in the first directory destination."""
+    iid = home.instance()["instance_id"]
     for dest in load_config(home)["destinations"]:
         if dest.get("kind") == "dir":
             d = Path(dest["path"]).expanduser()
-            ours = sorted(p for p in d.iterdir() if _NAME.match(p.name)) if d.is_dir() else []
-            return ours[-1] if ours else None
+            ours = _ours((p.name for p in d.iterdir()), iid) if d.is_dir() else []
+            return d / ours[-1] if ours else None
     return None
