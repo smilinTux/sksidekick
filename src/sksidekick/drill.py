@@ -18,7 +18,7 @@ def _path(home: Home) -> Path:
 def run_drill(home: Home) -> dict:
     at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
     latest = backup.latest(home)
-    result = {"at": at, "ok": False, "backup": latest.name if latest else None, "files": 0, "error": None}
+    result = {"at": at, "ok": False, "backup": latest.name if latest else None, "created": None, "files": 0, "error": None}
     if latest is None:
         result["error"] = "no backup to test"
     else:
@@ -29,7 +29,7 @@ def run_drill(home: Home) -> dict:
                 restored = len(scratch.story_paths())
                 if restored != len(manifest["files"]):
                     raise archive.ArchiveDamaged(f"restored {restored} files, manifest lists {len(manifest['files'])}")
-                result.update(ok=True, files=restored)
+                result.update(ok=True, files=restored, created=manifest.get("created"))
         except Exception as exc:  # a drill records every failure; it never crashes the caller
             result["error"] = f"{type(exc).__name__}: {exc}"
     home.state_dir.mkdir(parents=True, exist_ok=True)

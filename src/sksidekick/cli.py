@@ -60,7 +60,7 @@ def _cmd_verify(home: Home, a) -> int:
 
 def _cmd_import(home: Home, a) -> int:
     m = archive.import_archive(Path(a.path), home, phrase=_phrase_from_stdin())
-    print(f"restored {len(m['files'])} files into {home.root}")
+    print(f"restored {len(m['files'])} files into {home.root} (archive made {m.get('created')})")
     if m.get("purpose") != "move":
         print("This was a backup or export, not a move. If the original sidekick is still running, stop it: only one copy may answer.")
     return 0
