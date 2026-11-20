@@ -1,0 +1,84 @@
+"""One sidekick's home directory: where its story lives and which copy is live."""
+
+from __future__ import annotations
+
+import json
+import os
+import secrets
+from pathlib import Path
+
+STATUSES = ("live", "moving", "retired")
+_NOT_STORY = ("keys", "state")
+
+
+class Home:
+    def __init__(self, root: Path | str) -> None:
+        self.root = Path(root).expanduser()
+
+    @property
+    def memory_dir(self) -> Path:
+        return self.root / "memory"
+
+    @property
+    def soul_dir(self) -> Path:
+        return self.root / "soul"
+
+    @property
+    def config_dir(self) -> Path:
+        return self.root / "config"
+
+    @property
+    def keys_dir(self) -> Path:
+        return self.root / "keys"
+
+    @property
+    def state_dir(self) -> Path:
+        return self.root / "state"
+
+    @property
+    def journal_path(self) -> Path:
+        return self.root / "journal.md"
+
+    def story_paths(self) -> list[Path]:
+        """Relative paths of every file that is part of the story.
+
+        Keys and state are not story; the search index is rebuilt from the files.
+        """
+        if not self.root.is_dir():
+            return []
+        out = []
+        for p in self.root.rglob("*"):
+            rel = p.relative_to(self.root)
+            if rel.parts[0] in _NOT_STORY or p.name.startswith("index.db"):
+                continue
+            if p.is_file() and not p.is_symlink():
+                out.append(rel)
+        return sorted(out)
+
+    def is_empty(self) -> bool:
+        keys = self.keys_dir.is_dir() and any(self.keys_dir.iterdir())
+        return not self.story_paths() and not keys
+
+    def _instance_path(self) -> Path:
+        return self.state_dir / "instance.json"
+
+    def instance(self) -> dict:
+        return json.loads(self._instance_path().read_text())
+
+    def _write_instance(self, data: dict) -> None:
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        tmp = self._instance_path().with_suffix(".tmp")
+        tmp.write_text(json.dumps(data))
+        os.replace(tmp, self._instance_path())
+
+    def new_instance(self) -> str:
+        iid = secrets.token_hex(8)
+        self._write_instance({"instance_id": iid, "status": "live"})
+        return iid
+
+    def set_status(self, status: str) -> None:
+        if status not in STATUSES:
+            raise ValueError(f"unknown status {status!r}; one of {', '.join(STATUSES)}")
+        data = self.instance()
+        data["status"] = status
+        self._write_instance(data)

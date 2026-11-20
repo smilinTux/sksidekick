@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sksidekick"
+dynamic = ["version"]
+description = "Your own AI sidekick: export, backup, restore and delete that keep your story yours."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "GPL-3.0-or-later"
+dependencies = ["pyrage==1.4.*"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+sksidekick = "sksidekick.cli:main"
+
+[tool.hatch.version]
+path = "src/sksidekick/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sksidekick"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
