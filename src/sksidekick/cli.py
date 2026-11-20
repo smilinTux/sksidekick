@@ -1,0 +1,184 @@
+"""``sksidekick``: command line for the story-safe core."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+
+from sksidekick import __version__, archive, backup, drill, keys, lifecycle
+from sksidekick.home import Home
+
+NO_HOME = "no sidekick home: pass --home or set SKSIDEKICK_HOME"
+
+
+def _phrase_from_stdin() -> str:
+    line = sys.stdin.readline()
+    if not line.strip():
+        raise SystemExit("no recovery phrase on stdin")
+    return line.strip()
+
+
+def _print(obj) -> None:
+    print(json.dumps(obj, indent=1, default=str))
+
+
+def _cmd_init(home: Home, a) -> int:
+    if not home.is_empty():
+        print(f"{home.root} already holds a sidekick", file=sys.stderr)
+        return 1
+    for d in (home.memory_dir, home.soul_dir, home.config_dir):
+        d.mkdir(parents=True, exist_ok=True)
+    phrase = keys.create_keys(home)
+    home.new_instance()
+    print("Your recovery phrase:\n")
+    print(f"    {phrase}\n")
+    print("Write this down. It is the only way to restore your sidekick.")
+    return 0
+
+
+def _cmd_export(home: Home, a) -> int:
+    if a.plain:
+        print(f"{archive.export_plain(home, Path(a.path))} files written, readable by anyone who gets this folder")
+    else:
+        print(archive.export(home, Path(a.path)))
+    return 0
+
+
+def _cmd_verify(home: Home, a) -> int:
+    ident = archive.open_identity(Path(a.path), _phrase_from_stdin()) if a.phrase_stdin else keys.load_identity(home)
+    m = archive.verify(Path(a.path), ident)
+    print(f"ok: {len(m['files'])} files, made {m['created']}")
+    return 0
+
+
+def _cmd_import(home: Home, a) -> int:
+    m = archive.import_archive(Path(a.path), home, phrase=_phrase_from_stdin())
+    print(f"restored {len(m['files'])} files into {home.root}")
+    return 0
+
+
+def _cmd_backup(home: Home, a) -> int:
+    if a.action == "run":
+        res = backup.run_backup(home)
+        _print(res)
+        return 0 if all(r["ok"] for r in res) else 1
+    if a.action == "status":
+        st = backup.status(home)
+        _print(st)
+        return 1 if st["stale"] else 0
+    cfg = backup.load_config(home)
+    if not a.target:
+        print("give a path or rclone remote", file=sys.stderr)
+        return 2
+    dest = {"kind": "dir", "path": str(Path(a.target).expanduser())} if a.action == "add-dir" else {"kind": "rclone", "remote": a.target}
+    cfg["destinations"].append(dest)
+    backup.save_config(home, cfg)
+    print(f"added {dest}")
+    return 0
+
+
+def _cmd_drill(home: Home, a) -> int:
+    res = drill.run_drill(home)
+    _print(res)
+    return 0 if res["ok"] else 1
+
+
+def _cmd_reset(home: Home, a) -> int:
+    if not a.yes:
+        planned = lifecycle.plan_reset(home, keep_settings=a.keep_settings)
+        print(f"reset would remove {len(planned)} files. Export first with --export-to PATH. Re-run with --yes.")
+        return 2
+    _print(lifecycle.reset(home, keep_settings=a.keep_settings, export_to=a.export_to))
+    return 0
+
+
+def _cmd_delete(home: Home, a) -> int:
+    if not a.yes:
+        print(f"delete would destroy the keys and all {len(home.story_paths())} story files in {home.root}, permanently. "
+              "Re-run with --yes.")
+        return 2
+    res = lifecycle.delete(home)
+    print(f"destroyed keys: {', '.join(res['keys_destroyed'])}; removed {res['files_removed']} files.")
+    print(res["notice"])
+    return 0
+
+
+def _cmd_move_out(home: Home, a) -> int:
+    print(f"packed for the move: {lifecycle.move_out(home, Path(a.path))}")
+    print("This copy no longer answers. Import the archive at the new place, check it, then run: sksidekick retire --yes")
+    return 0
+
+
+def _cmd_retire(home: Home, a) -> int:
+    if not a.yes:
+        print("retire destroys this old copy. Re-run with --yes once the new place works.")
+        return 2
+    res = lifecycle.retire(home)
+    print(f"old copy destroyed ({res['files_removed']} files).")
+    return 0
+
+
+def _cmd_status(home: Home, a) -> int:
+    _print({"home": str(home.root), "instance": home.instance(), "backup": backup.status(home), "drill": drill.last_drill(home)})
+    return 0
+
+
+def _parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="sksidekick", description="Keep your sidekick's story safe.")
+    p.add_argument("--version", action="version", version=__version__)
+    p.add_argument("--home", help="sidekick home (default: $SKSIDEKICK_HOME)")
+    sub = p.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("init", help="create a sidekick home, its key and the recovery phrase").set_defaults(fn=_cmd_init)
+    e = sub.add_parser("export", help="encrypted archive of the whole story, or --plain readable copy")
+    e.add_argument("path")
+    e.add_argument("--plain", action="store_true", help="write a decrypted folder instead")
+    e.set_defaults(fn=_cmd_export)
+    v = sub.add_parser("verify", help="check an archive completely")
+    v.add_argument("path")
+    v.add_argument("--phrase-stdin", action="store_true", help="open it with the recovery phrase from stdin")
+    v.set_defaults(fn=_cmd_verify)
+    i = sub.add_parser("import", help="restore an archive into an empty home (phrase on stdin)")
+    i.add_argument("path")
+    i.add_argument("--phrase-stdin", action="store_true", required=True)
+    i.set_defaults(fn=_cmd_import)
+    b = sub.add_parser("backup", help="backups: run, status, add-dir, add-rclone")
+    b.add_argument("action", choices=["run", "status", "add-dir", "add-rclone"])
+    b.add_argument("target", nargs="?")
+    b.set_defaults(fn=_cmd_backup)
+    sub.add_parser("drill", help="test-restore the latest backup").set_defaults(fn=_cmd_drill)
+    r = sub.add_parser("reset", help="wipe memory and start fresh")
+    r.add_argument("--keep-settings", action="store_true")
+    r.add_argument("--export-to", type=Path)
+    r.add_argument("--yes", action="store_true")
+    r.set_defaults(fn=_cmd_reset)
+    d = sub.add_parser("delete", help="permanently delete (destroys the keys)")
+    d.add_argument("--yes", action="store_true")
+    d.set_defaults(fn=_cmd_delete)
+    m = sub.add_parser("move-out", help="pack for a move; this copy stops answering")
+    m.add_argument("path")
+    m.set_defaults(fn=_cmd_move_out)
+    t = sub.add_parser("retire", help="destroy the old copy after a move")
+    t.add_argument("--yes", action="store_true")
+    t.set_defaults(fn=_cmd_retire)
+    sub.add_parser("status", help="instance, backup and drill state").set_defaults(fn=_cmd_status)
+    return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    a = _parser().parse_args(argv)
+    root = a.home or os.environ.get("SKSIDEKICK_HOME")
+    if not root:
+        print(NO_HOME, file=sys.stderr)
+        return 2
+    try:
+        return a.fn(Home(root), a)
+    except (keys.WrongPhrase, archive.ArchiveDamaged, FileExistsError, RuntimeError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
