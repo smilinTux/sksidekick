@@ -77,7 +77,8 @@ uv="$app/bin/uv"
 say "Hermes $HERMES_REF ($HERMES_COMMIT)"
 inst="$app/hermes-install.sh"
 curl -fsSL -o "$inst" "https://raw.githubusercontent.com/${HERMES_REPO#https://github.com/}/$HERMES_COMMIT/scripts/install.sh"
-HERMES_REPO_URL="$HERMES_REPO.git" bash "$inst" --branch "$HERMES_REF" --commit "$HERMES_COMMIT" \
+# its installer wants the release branch that holds the commit (a tag is refused); the commit pins the content
+HERMES_REPO_URL="$HERMES_REPO.git" bash "$inst" --branch "$HERMES_BRANCH" --commit "$HERMES_COMMIT" \
     --dir "$app/hermes-agent" --hermes-home "$app/hermes-seed" \
     --non-interactive --skip-browser --skip-computer-use
 [ "$(git -C "$app/hermes-agent" rev-parse HEAD)" = "$HERMES_COMMIT" ] || die "Hermes is not at $HERMES_COMMIT"
