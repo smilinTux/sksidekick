@@ -7,7 +7,8 @@
 
 **Goal:** One sidekick runs from one OCI image (Linux x86_64 and arm64) or from a plain installer (macOS Apple Silicon primary, Linux too), with the Plan 1 core keeping its whole story safe and exactly one copy answering.
 
-**Architecture:** All of a sidekick's data lives in ONE directory, the sidekick home (`/data` in the image, `~/Library/Application Support/sksidekick` on macOS, `~/.local/share/sksidekick` on Linux). Code lives outside it. A small supervisor, `sksidekick serve`, refuses to start unless the copy is live, then runs the Hermes gateway as a child and runs backups and drills on schedule. Hermes reaches memory only through the `skmemory-mcp` child that hermes-skmemory starts (design: skmemory stays outside Hermes).
+**Architecture:** All of a sidekick's data lives in ONE directory, the sidekick home (`/opt/data/sidekick` in the image, `~/Library/Application Support/sksidekick` on macOS, `~/.local/share/sksidekick` on Linux). Code lives outside it. A small supervisor, `sksidekick serve`, refuses to start unless the copy is live, then runs the Hermes gateway as a child and runs backups and drills on schedule. Hermes reaches memory only through the `skmemory-mcp` child that hermes-skmemory starts (design: skmemory stays outside Hermes'
+venv), and that child keeps its store inside `HERMES_HOME`, so inside the home.
 
 **Tech Stack:** Hermes fork `chefboyrdave21/hermes-agent` tag `v0.23.1-sk.4` (its own pinned Dockerfile and `pm` lock); hermes-skmemory `v0.2.0`; skmemory (local tier only: flat JSON + SQLite/FTS5); sksidekick (Plan 1); Docker buildx; launchd (macOS) and systemd user units (Linux); GitHub Actions (ubuntu arm and x86, macos-14).
 
@@ -15,30 +16,36 @@
 
 1. **Data layout (one home, everything else rebuildable):**
    ```
-   <home>/memory/            skmemory store (SKMEMORY_HOME); index.db* excluded from archives (rebuilt)
+   <home>/memory/            memories added outside Hermes (import, tools); index.db* excluded from archives (rebuilt)
    <home>/soul/              soul file with the personality type and voice
    <home>/config/            sksidekick config (backup.json, serve.json)
    <home>/journal.md
    <home>/hermes/            HERMES_HOME: config.yaml, sessions, state DB (the conversations are part of the story)
+   <home>/hermes/.skmemory/agents/sidekick/   the memory provider's store: memory/, config/ (story; index.db* and logs/ left out)
    <home>/keys/, <home>/state/   Plan 1 (never in an archive except the phrase-wrapped key)
    ```
    Excluded from the story, so never in an archive: `hermes/logs/`, `hermes/cache/`, `hermes/tools/` (pm-installed toolchain), `hermes/plugins/`
-   (reinstalled from the image), `hermes/.skmemory/` (must stay empty, see 2), and any `*.lock` or `*.pid`.
-2. **Memory wiring:** hermes-skmemory in **linked** mode with `SKMEMORY_HOME=<home>/memory` and agent name `sidekick`, so memory is in the home's
-   `memory/` and not in the plugin's private `hermes/.skmemory/`. `serve` refuses to start if `hermes/.skmemory/` holds files (memory in the wrong place
-   would silently miss backups).
+   (reinstalled from the image), the store's `logs/`, and any `*.lock` or `*.pid`.
+2. **Memory wiring (corrected 2026-11-20 after reading hermes-skmemory v0.2.0):** hermes-skmemory in its default **isolated** mode, agent name
+   `sidekick` (`hermes/skmemory.json`: `{"agent": "sidekick", "assume_owner": true}`). Linked mode cannot be used: it strips every inherited
+   `SKMEMORY_*` variable and writes under an skcapstone home outside the sidekick home. Isolated mode keeps the store at
+   `$HERMES_HOME/.skmemory/agents/sidekick/`, inside the home, so every backup has it. `serve` refuses to start when `HERMES_HOME` is not the home's
+   `hermes/` or `skmemory.json` sets `skcapstone_home` (the two ways memory would land where backups miss it).
 3. **Secrets in the home:** channel tokens live in `hermes/config.yaml` and `hermes/.env`. They are part of an encrypted archive (the design says
    "credentials only if the user opts in"), so `export` takes `--with-credentials`. Without it, those two files go into the archive with their secret
    values replaced by `__REMOVED__`, and import says which channels need logging in again. Backups always include credentials (they are only ever
    opened by the same user's key).
-4. **One live copy:** `serve` calls `lifecycle.require_live` at start and every 60 s, and stops the gateway within 60 s of the status leaving `live`.
+4. **One live copy:** `serve` calls `lifecycle.require_live` at start and every 5 s, and stops the gateway within 5 s of the status leaving `live`.
    `move-out` therefore silences the old copy before the archive is even copied.
 5. **Schedules inside `serve`, not cron:** backup every `interval_hours` (default 24), drill every 7 days, both jittered by up to 10 min. Their
    results go to `state/`, and a failure or a stale backup becomes a message to the user on their own channel (design: alerts only to the user,
    nothing phones home). The message text is fixed in Task 3.
 6. **Image:** `ghcr.io/smilintux/sksidekick:<version>` (private until Chef says public), multi-arch, built FROM the Hermes fork's own Dockerfile
-   at the pinned tag (built in the same workflow as stage `hermes`), plus skmemory and hermes-skmemory at pinned versions, plus sksidekick. Runs as
-   uid 10000, `/data` is the only volume, no port is published by default (the first-run page of Plan 3 adds one).
+   at the pinned tag (built in the same workflow as stage `hermes`), plus skmemory and hermes-skmemory at pinned versions, plus sksidekick. The fork's
+   image declares `VOLUME /opt/data` and uses it as `HOME` (caches, `.local`), so the sidekick home is `/opt/data/sidekick` and that junk stays out
+   of the story. The fork's entrypoint runs the container command as user `hermes` (uid 10000, remappable with `HERMES_UID`) under s6; its own
+   `main-hermes` service is `sleep infinity`, so `CMD ["sksidekick", "serve"]` makes `serve` the only gateway supervisor. No port is published by
+   default (the first-run page of Plan 3 adds one).
 7. **Plain installer:** `install.sh` uses `uv` to install a pinned Python, Hermes (from the fork tag via its `pm` installer), skmemory and sksidekick
    into `~/.local/share/sksidekick-app/` (code), creates the home, runs `sksidekick init` (the phrase is shown in the terminal), and installs a
    launchd agent (`io.skworld.sksidekick`) or a systemd user unit (`sksidekick.service`). `install.sh --uninstall` removes code and service, never the home.
@@ -53,9 +60,9 @@
 
 ## Review Focus
 
-1. **Memory written outside the home** (plugin falls back to its private store, or `SKMEMORY_HOME` not passed to the child): backups would silently
-   miss memories. `serve` refuses to start, and a test runs a real Hermes turn and asserts the memory file appears under `<home>/memory/`. (Task 2)
-2. **Two copies answering after a move** (old container keeps running): the old copy stops within 60 s of `move-out`. (Task 3 test with a fake gateway)
+1. **Memory written outside the home** (`HERMES_HOME` pointed elsewhere, or the plugin switched to linked mode): backups would silently miss
+   memories. `serve` refuses to start, and a test runs a real Hermes turn and asserts the memory file appears in the home's plugin store. (Tasks 2, 3)
+2. **Two copies answering after a move** (old container keeps running): the old copy stops within 5 s of `move-out`. (Task 3 test with a real child)
 3. **Disk full or the volume read-only:** `serve` reports it to the user and keeps the gateway running rather than crash-looping. A backup that fails
    for lack of space never deletes old backups (Plan 1 already guarantees rotation only after success). (Task 3)
 4. **Container restarted mid-backup:** the next start finds no `.part` files counted as backups and a stale status, and backs up again. (Task 3)
@@ -81,14 +88,15 @@
 **Files:** Create `packaging/Dockerfile`, `packaging/versions.env`, `packaging/hermes-config.yaml` (template: `memory.provider: skmemory`, linked mode, `SKMEMORY_HOME` from env), `packaging/entrypoint.sh`, `.github/workflows/image.yml`, `tests/image/test_image.sh`.
 
 **Interfaces:**
-- Image env: `SKSIDEKICK_HOME=/data`, `HERMES_HOME=/data/hermes`, `SKMEMORY_HOME=/data/memory`, `SKMEMORY_AGENT=sidekick`; entrypoint runs
-  `sksidekick serve` (Task 3); with no home yet it prints "Run: docker exec -it <name> sksidekick init" and waits (no crash loop).
+- Image env: `SKSIDEKICK_HOME=/opt/data/sidekick`, `HERMES_HOME=/opt/data/sidekick/hermes`; command `sksidekick serve` (Task 3); with no home
+  yet it prints "Run: docker exec -it <name> sksidekick init" and waits (no crash loop).
 - `image.yml`: on PR builds amd64 and arm64 (no push); on tag `sksidekick-v*` pushes to GHCR with the tag and digest; uses GitHub OIDC, no stored token.
 
 - [ ] `tests/image/test_image.sh` first: build, `docker run` with a temp volume, `sksidekick init` (phrase printed), `hermes --version` shows `0.23.1-sk.4`,
   `skmemory-mcp` on PATH, config has `memory.provider: skmemory`; one scripted Hermes turn against a stub OpenAI-compatible model server (a 20-line
-  Python HTTP server in `tests/image/stub_model.py`) that triggers a memory store, then assert a memory file under `/data/memory/` and none under
-  `/data/hermes/.skmemory/`; then `sksidekick backup add-dir /data/usb && backup run && drill` exits 0. Implement until it passes on amd64 locally
+  Python HTTP server in `tests/image/stub_model.py`) that triggers a memory store, then assert a memory file under
+  `/opt/data/sidekick/hermes/.skmemory/agents/sidekick/memory/` and that a backup made right after holds it; then
+  `sksidekick backup add-dir /opt/data/usb && backup run && drill` exits 0. Implement until it passes on amd64 locally
   and both arches in CI. Commit `feat(image): sksidekick OCI image`.
 
 ## Task 3: `sksidekick serve` supervisor
@@ -100,7 +108,8 @@
   Checks: `require_live` (refuse, exit 3, message "this copy is not the live sidekick"), `hermes/.skmemory/` empty (refuse, exit 3). Starts the
   gateway child; restarts it with backoff 5 s doubling to 5 min on exit; every 60 s re-checks `require_live` and stops the child (SIGTERM, 20 s,
   SIGKILL) if not live; runs `run_backup` when `backup.status(...).stale` or the interval passed; runs `run_drill` every 7 days.
-- `notify` default sends through the Hermes CLI to the owner's home channel (`hermes send --to owner "<text>"`); messages, exactly:
+- `notify` default appends to `state/notices.jsonl` and, when `config/serve.json` sets `notify_to` (a platform, for example `telegram`), runs
+  `hermes send --to <platform> --quiet "<text>"`, which reaches that platform's home channel (Hermes sk.4 has no `owner` target); messages, exactly:
   - "Backup failed: <error>. Your last good backup is from <date>." (or "You have no backup yet.")
   - "Your restore test failed: <error>. Your backups may not restore. Please check your backup destination."
   - "Your sidekick's disk is full. It keeps running, but it cannot save backups until there is space."
