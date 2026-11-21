@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # End-to-end check of a built sksidekick image: tests/image/test_image.sh IMAGE
-set -euo pipefail
+# No pipefail: every check pipes into grep -q, which exits early and makes the writer die of SIGPIPE (141),
+# turning a match into a failure, or worse, hiding a match in a "should not appear" check.
+set -eu
 IMG="${1:?usage: test_image.sh IMAGE}"
 C="sksidekick-test-$$"
 VOL="$(docker volume create)"
@@ -29,10 +31,13 @@ ok "init printed a recovery phrase"
 docker exec "$C" sh -c 'stat -c %U /opt/data/sidekick/keys/live.identity' | grep -qx hermes || fail "keys are not owned by hermes"
 ok "files belong to the hermes user"
 
-ver="$(docker exec "$C" hermes --version 2>&1 | head -1)"
+ver="$(docker exec "$C" hermes --version 2>&1 || true)"
+ver="${ver%%$'\n'*}"
 echo "hermes --version: $ver"
-# The build stamp may lack the -sk.N suffix; image.yml already checked the tag's commit.
-printf '%s' "$ver" | grep -q "0.23.1" || fail "wrong Hermes version: $ver"
+# A Docker build of the fork has no git metadata, so it prints "vunknown (<release date>)";
+# image.yml already checked the tag's commit, so match the pinned release date.
+want="$(sed -n 's/^HERMES_RELEASE_DATE=//p' "$(dirname "$0")/../../packaging/versions.env")"
+case "$ver" in *"($want)"*) ;; *) fail "wrong Hermes build: $ver (want release $want)";; esac
 docker exec "$C" sh -c 'command -v skmemory-mcp' >/dev/null || fail "skmemory-mcp not on PATH"
 docker exec "$C" test -f /opt/hermes/plugins/memory/skmemory/plugin.yaml || fail "plugin not bundled"
 ok "Hermes sk.4, skmemory-mcp and the bundled plugin are present"
