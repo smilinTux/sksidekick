@@ -66,7 +66,10 @@ turn="$(docker exec -u hermes -e OPENAI_API_KEY=stub -e CUSTOM_API_KEY=stub "$C"
 printf '%s\n' "$turn" | tail -8
 remembered() { docker exec "$C" grep -rlq "Juniper" "$store"; }
 if ! wait_for_quiet 30 remembered; then
-    docker exec "$C" sh -c "find /opt/data -name '*.json' -newer /opt/data/sidekick/keys/live.identity -path '*memor*' 2>/dev/null | head" || true
+    echo "--- hermes memory status"; docker exec -u hermes "$C" sidekick-hermes memory status 2>&1 | tail -20 || true
+    echo "--- plugin store"; docker exec "$C" sh -c 'find /opt/data/sidekick/hermes/.skmemory 2>/dev/null | head -30' || true
+    echo "--- skmemory in hermes logs"
+    docker exec "$C" sh -c 'grep -rhi "skmemory" /opt/data/sidekick/hermes/logs 2>/dev/null | tail -20' || true
     fail "a Hermes turn did not store a memory in the sidekick home ($store)"
 fi
 ok "a Hermes turn stored its memory inside the sidekick home"
