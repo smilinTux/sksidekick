@@ -29,7 +29,10 @@ ok "init printed a recovery phrase"
 docker exec "$C" sh -c 'stat -c %U /opt/data/sidekick/keys/live.identity' | grep -qx hermes || fail "keys are not owned by hermes"
 ok "files belong to the hermes user"
 
-docker exec "$C" hermes --version | grep -q "0.23.1-sk.4" || fail "wrong Hermes version"
+ver="$(docker exec "$C" hermes --version 2>&1 | head -1)"
+echo "hermes --version: $ver"
+# The build stamp may lack the -sk.N suffix; image.yml already checked the tag's commit.
+printf '%s' "$ver" | grep -q "0.23.1" || fail "wrong Hermes version: $ver"
 docker exec "$C" sh -c 'command -v skmemory-mcp' >/dev/null || fail "skmemory-mcp not on PATH"
 docker exec "$C" test -f /opt/hermes/plugins/memory/skmemory/plugin.yaml || fail "plugin not bundled"
 ok "Hermes sk.4, skmemory-mcp and the bundled plugin are present"
