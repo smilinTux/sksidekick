@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Plain sksidekick install for macOS and Linux (no container):
-#   install.sh [--home PATH] [--uninstall] [--force-hermes-link]
+#   install.sh [--home PATH] [--no-init] [--uninstall] [--force-hermes-link]
+#   --no-init: leave the home empty for `sksidekick import` (moving here); the service waits for it.
 # Code goes in the app folder; the sidekick's data (its home) goes elsewhere and is never removed here.
 set -eu
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -26,12 +27,14 @@ esac
 
 uninstall=""
 force_link=""
+no_init=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --home) [ $# -ge 2 ] || die "--home needs a path"; home="$2"; shift 2 ;;
         --uninstall) uninstall=1; shift ;;
+        --no-init) no_init=1; shift ;;
         --force-hermes-link) force_link=1; shift ;;
-        -h|--help) sed -n 2,4p "$0"; exit 0 ;;
+        -h|--help) sed -n 2,5p "$0"; exit 0 ;;
         *) die "unknown option: $1" ;;
     esac
 done
@@ -108,7 +111,9 @@ install -m 0755 "$here/sidekick-start.sh" "$app/bin/sidekick-start"
 mkdir -p "$HOME/.local/bin"
 ln -sf "$app/bin/sksidekick" "$HOME/.local/bin/sksidekick"
 
-if [ ! -f "$home/state/instance.json" ]; then
+if [ -n "$no_init" ]; then
+    say "No sidekick created. Import yours: sksidekick --home \"$home\" import ARCHIVE --phrase-stdin"
+elif [ ! -f "$home/state/instance.json" ]; then
     say "Creating your sidekick in $home"
     "$app/bin/sksidekick" --home "$home" init
 fi
