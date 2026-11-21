@@ -85,7 +85,7 @@ venv), and that child keeps its store inside `HERMES_HOME`, so inside the home.
 
 ## Task 2: Image
 
-**Files:** Create `packaging/Dockerfile`, `packaging/versions.env`, `packaging/hermes-config.yaml` (template: `memory.provider: skmemory`, linked mode, `SKMEMORY_HOME` from env), `packaging/entrypoint.sh`, `.github/workflows/image.yml`, `tests/image/test_image.sh`.
+**Files:** Create `packaging/Dockerfile`, `packaging/versions.env`, `packaging/hermes-config.yaml` (template: `memory.provider: skmemory`), `packaging/skmemory.json` (isolated mode, agent `sidekick`), `packaging/entrypoint.sh`, `.github/workflows/image.yml`, `tests/image/test_image.sh`.
 
 **Interfaces:**
 - Image env: `SKSIDEKICK_HOME=/opt/data/sidekick`, `HERMES_HOME=/opt/data/sidekick/hermes`; command `sksidekick serve` (Task 3); with no home
@@ -106,7 +106,7 @@ venv), and that child keeps its store inside `HERMES_HOME`, so inside the home.
 **Interfaces:**
 - `serve(home: Home, *, gateway_argv: list[str], clock=time.monotonic, wall=datetime.now, sleep=time.sleep, notify: Callable[[str], None]) -> int`.
   Checks: `require_live` (refuse, exit 3, message "this copy is not the live sidekick"), `hermes/.skmemory/` empty (refuse, exit 3). Starts the
-  gateway child; restarts it with backoff 5 s doubling to 5 min on exit; every 60 s re-checks `require_live` and stops the child (SIGTERM, 20 s,
+  gateway child; restarts it with backoff 5 s doubling to 5 min on exit; every 5 s re-checks `require_live` and stops the child (SIGTERM, 20 s,
   SIGKILL) if not live; runs `run_backup` when `backup.status(...).stale` or the interval passed; runs `run_drill` every 7 days.
 - `notify` default appends to `state/notices.jsonl` and, when `config/serve.json` sets `notify_to` (a platform, for example `telegram`), runs
   `hermes send --to <platform> --quiet "<text>"`, which reaches that platform's home channel (Hermes sk.4 has no `owner` target); messages, exactly:
