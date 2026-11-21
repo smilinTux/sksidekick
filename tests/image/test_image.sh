@@ -70,6 +70,16 @@ if ! wait_for_quiet 30 remembered; then
     echo "--- plugin store"; docker exec "$C" sh -c 'find /opt/data/sidekick/hermes/.skmemory 2>/dev/null | head -30' || true
     echo "--- skmemory in hermes logs"
     docker exec "$C" sh -c 'grep -rhi "skmemory" /opt/data/sidekick/hermes/logs 2>/dev/null | tail -20' || true
+    echo "--- the same turn, verbose, plugin host at DEBUG"
+    docker exec -u hermes -e OPENAI_API_KEY=stub -e CUSTOM_API_KEY=stub -e HERMES_PLUGIN_HOST_LOG_LEVEL=DEBUG "$C" \
+        sidekick-hermes chat -v -Q --provider custom --base-url http://127.0.0.1:18999/v1 -m stub \
+        -q "Remember that my fox is called Juniper." 2>&1 | grep -iE "skmemory|memory|sync|owner|reader|provider" | tail -40 || true
+    echo "--- direct skmemory write with the plugin's child environment"
+    docker exec -u hermes "$C" env -u SKMEMORY_AGENT \
+        SKCAPSTONE_HOME=/opt/data/sidekick/hermes/.skmemory SKAGENT=sidekick SKMEMORY_AGENT=sidekick SKCAPSTONE_AGENT=sidekick \
+        SKMEMORY_HOME=/opt/data/sidekick/hermes/.skmemory/agents/sidekick \
+        skmemory snapshot --layer short-term --tags diag "diag" "direct write: Juniper" 2>&1 | tail -8 || true
+    docker exec "$C" sh -c 'find /opt/data/sidekick/hermes/.skmemory -newer /opt/data/sidekick/keys/live.identity -type f | head' || true
     fail "a Hermes turn did not store a memory in the sidekick home ($store)"
 fi
 ok "a Hermes turn stored its memory inside the sidekick home"
