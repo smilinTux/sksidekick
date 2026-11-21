@@ -71,11 +71,20 @@ def test_hermes_logs_tools_cache_plugins_excluded(bare_home: Home):
     _touch(
         bare_home,
         "hermes/logs/gateway.log", "hermes/cache/x.bin", "hermes/tools/node/bin/node", "hermes/plugins/p/plugin.py",
-        "hermes/.skmemory/stray.json", "hermes/gateway.lock", "hermes/gateway.pid", "memory/a.json",
+        "hermes/.skmemory/agents/sidekick/logs/x.log", "hermes/gateway.lock", "hermes/gateway.pid", "memory/a.json",
     )
     (bare_home.root / "hermes/tools/node/bin/npx").symlink_to("node")  # toolchains are full of links
     assert [str(p) for p in bare_home.story_paths()] == ["memory/a.json"]
     assert bare_home.symlinks() == []
+
+
+def test_plugin_memory_store_is_story(bare_home: Home):
+    _touch(bare_home, "hermes/.skmemory/agents/sidekick/memory/long-term/m1.json",
+           "hermes/.skmemory/agents/sidekick/memory/index.db", "hermes/.skmemory/agents/sidekick/config/skmemory.yaml")
+    assert [str(p) for p in bare_home.story_paths()] == [
+        "hermes/.skmemory/agents/sidekick/config/skmemory.yaml", "hermes/.skmemory/agents/sidekick/memory/long-term/m1.json",
+    ]
+    assert bare_home.agent_memory_dir == bare_home.root / "hermes/.skmemory/agents/sidekick/memory"
 
 
 def test_hermes_sessions_included(bare_home: Home):

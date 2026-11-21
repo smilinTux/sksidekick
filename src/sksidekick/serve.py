@@ -17,6 +17,7 @@ import random
 import signal
 import subprocess
 import sys
+import os
 import time
 from pathlib import Path
 from typing import Callable
@@ -82,10 +83,20 @@ def precheck(home: Home) -> str | None:
         lifecycle.require_live(home)
     except RuntimeError as exc:
         return str(exc)
-    stray = home.root / "hermes" / ".skmemory"
-    if stray.is_dir() and any(p.is_file() for p in stray.rglob("*")):
-        return (f"memory was written to {stray} (hermes/.skmemory) instead of {home.memory_dir}; backups would miss it. "
-                "Move those memories into memory/ and check SKMEMORY_HOME, then start again.")
+    # Memory must land inside the home, or backups silently miss it.
+    hermes_home = Path(os.environ.get("HERMES_HOME") or home.hermes_dir).expanduser()
+    if hermes_home.resolve() != home.hermes_dir.resolve():
+        return (f"HERMES_HOME is {hermes_home}, not {home.hermes_dir}: Hermes would keep conversations and memory "
+                "where backups miss them. Set HERMES_HOME to the sidekick home's hermes/ folder.")
+    plugin_cfg = home.hermes_dir / "skmemory.json"
+    if plugin_cfg.exists():
+        try:
+            linked = str(json.loads(plugin_cfg.read_text()).get("skcapstone_home") or "").strip()
+        except (OSError, ValueError, AttributeError) as exc:
+            return f"{plugin_cfg} is unreadable ({exc}); fix it so memory is known to stay in the home."
+        if linked:
+            return (f"{plugin_cfg} links memory to {linked}, outside the sidekick home, so backups would miss it. "
+                    "Remove skcapstone_home (a sidekick uses the plugin's own store), then start again.")
     return None
 
 

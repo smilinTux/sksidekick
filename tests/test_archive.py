@@ -503,7 +503,7 @@ def test_archive_refuses_excluded_paths(keyed, tmp_path: Path):
     home, _ = keyed
 
     def add(t):
-        info = tarfile.TarInfo("story/hermes/.skmemory/stray.json")
+        info = tarfile.TarInfo("story/hermes/logs/gateway.log")
         info.size = 1
         t.addfile(info, io.BytesIO(b"x"))
 

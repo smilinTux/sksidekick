@@ -11,9 +11,13 @@ from pathlib import Path, PurePosixPath
 STATUSES = ("live", "moving", "retired")
 _NOT_STORY = ("keys", "state")
 STAGING_PREFIX = ".sksidekick-import-"
+HERMES = "hermes"
+SKMEMORY_AGENT = "sidekick"
+# hermes-skmemory in its default (isolated) mode keeps the sidekick's memory store here,
+# inside HERMES_HOME and so inside the sidekick home: it is story and goes in every archive.
+AGENT_STORE = f"{HERMES}/.skmemory/agents/{SKMEMORY_AGENT}"
 # Rebuildable or machine-local parts of the Hermes home: never story, never in an archive.
-# hermes/.skmemory must stay empty (memory lives in memory/); serve refuses to start otherwise.
-EXCLUDE_DIRS = ("hermes/logs", "hermes/cache", "hermes/tools", "hermes/plugins", "hermes/.skmemory")
+EXCLUDE_DIRS = ("hermes/logs", "hermes/cache", "hermes/tools", "hermes/plugins", f"{AGENT_STORE}/logs")
 EXCLUDE_GLOBS = ("*.lock", "*.pid")
 
 
@@ -46,6 +50,15 @@ class Home:
     @property
     def config_dir(self) -> Path:
         return self.root / "config"
+
+    @property
+    def hermes_dir(self) -> Path:
+        return self.root / HERMES
+
+    @property
+    def agent_memory_dir(self) -> Path:
+        """Where Hermes' memory provider keeps the memories (``memory/`` is for memories added outside Hermes)."""
+        return self.root / AGENT_STORE / "memory"
 
     @property
     def keys_dir(self) -> Path:

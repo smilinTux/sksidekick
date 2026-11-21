@@ -94,13 +94,26 @@ def test_refuses_when_not_live(live: Home, capsys):
     assert "this copy is not the live sidekick" in capsys.readouterr().err
 
 
-def test_refuses_when_plugin_store_has_files(live: Home, capsys):
-    stray = live.root / "hermes/.skmemory/sidekick/memory.json"
-    stray.parent.mkdir(parents=True)
-    stray.write_text("{}")
+def test_refuses_when_hermes_home_is_outside_the_home(live: Home, capsys, monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "elsewhere"))
     code, procs = _run(live, Clock(), loops=3)
     assert code == 3 and procs == []
-    assert "hermes/.skmemory" in capsys.readouterr().err
+    assert "HERMES_HOME" in capsys.readouterr().err
+
+
+def test_refuses_when_memory_is_linked_outside(live: Home, capsys, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(live.hermes_dir))
+    live.hermes_dir.mkdir()
+    (live.hermes_dir / "skmemory.json").write_text(json.dumps({"skcapstone_home": "~/.skcapstone", "agent": "x"}))
+    code, procs = _run(live, Clock(), loops=3)
+    assert code == 3 and procs == []
+    assert "skcapstone_home" in capsys.readouterr().err
+
+
+def test_starts_with_hermes_home_inside(live: Home, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(live.hermes_dir))
+    code, procs = _run(live, Clock(), loops=1)
+    assert code == 0 and len(procs) == 1
 
 
 def test_stops_gateway_within_60s_after_move_out(live: Home, tmp_path: Path):
