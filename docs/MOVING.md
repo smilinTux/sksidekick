@@ -34,15 +34,16 @@ docker exec sidekick chown hermes:hermes /opt/data/move.sksk
 docker exec -i sidekick sksidekick import /opt/data/move.sksk --phrase-stdin
 ```
 
-Plain install (leave the home empty, then import):
+Plain install (leave the home empty, then import into the home the installer printed):
 
 ```sh
 bash packaging/install.sh --no-init
-sksidekick import ./move.sksk --phrase-stdin
+sksidekick --home "<your sidekick home>" import ./move.sksk --phrase-stdin
 ```
 
 Type the phrase when asked (it is read from the keyboard, never from the command line). The new place starts
-answering by itself once the import finishes. Check it with `sksidekick status`: it should say `live`.
+answering by itself once the import finishes. Check it with `sksidekick --home "<home>" status` (in a container:
+`docker exec sidekick sksidekick status`): it should say `live`.
 
 ## 3. Retire the old place
 
@@ -58,8 +59,9 @@ Retire checks that the move archive is still where the move put it and still ope
 
 ## Changed your mind?
 
-Before you retire, `sksidekick move-cancel` at the old place makes it answer again. If you already imported the
-archive somewhere, delete that new copy (`sksidekick delete --yes` there): only one copy may answer.
+Before you retire, `sksidekick move-cancel` at the old place (with `--home` on a plain install) makes it answer
+again. If you already imported the archive somewhere, delete that new copy (`sksidekick delete --yes` there):
+only one copy may answer.
 
 ## What moves and what does not
 
