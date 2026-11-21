@@ -55,3 +55,31 @@ def test_is_not_empty_with_only_an_index(bare_home: Home):
     bare_home.memory_dir.mkdir(parents=True)
     (bare_home.memory_dir / "index.db").write_text("x")
     assert not bare_home.is_empty()
+
+
+# plan 2, task 1 -------------------------------------------------------------
+
+
+def _touch(home: Home, *rels: str) -> None:
+    for rel in rels:
+        p = home.root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("x")
+
+
+def test_hermes_logs_tools_cache_plugins_excluded(bare_home: Home):
+    _touch(
+        bare_home,
+        "hermes/logs/gateway.log", "hermes/cache/x.bin", "hermes/tools/node/bin/node", "hermes/plugins/p/plugin.py",
+        "hermes/.skmemory/stray.json", "hermes/gateway.lock", "hermes/gateway.pid", "memory/a.json",
+    )
+    (bare_home.root / "hermes/tools/node/bin/npx").symlink_to("node")  # toolchains are full of links
+    assert [str(p) for p in bare_home.story_paths()] == ["memory/a.json"]
+    assert bare_home.symlinks() == []
+
+
+def test_hermes_sessions_included(bare_home: Home):
+    _touch(bare_home, "hermes/sessions/2026-11-20.jsonl", "hermes/state.db", "hermes/config.yaml", "hermes/.env")
+    assert [str(p) for p in bare_home.story_paths()] == [
+        "hermes/.env", "hermes/config.yaml", "hermes/sessions/2026-11-20.jsonl", "hermes/state.db",
+    ]

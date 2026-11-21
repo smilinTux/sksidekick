@@ -205,3 +205,12 @@ def test_dir_copy_is_verified_at_the_destination(keyed: Home, tmp_path: Path, mo
     res = backup.run_backup(keyed, now=T0)
     assert res[0]["ok"] is False
     assert list(usb.iterdir()) == []
+
+
+def test_backup_keeps_credentials(keyed: Home, tmp_path: Path):
+    (keyed.root / "hermes").mkdir()
+    (keyed.root / "hermes/.env").write_text("TELEGRAM_BOT_TOKEN=123:abc\n")
+    _dest(keyed, tmp_path / "usb")
+    backup.run_backup(keyed, now=T0)
+    m = archive.verify(backup.latest(keyed), keys.load_identity(keyed))
+    assert m["redacted"] == []

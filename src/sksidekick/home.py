@@ -2,19 +2,33 @@
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
 import secrets
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 STATUSES = ("live", "moving", "retired")
 _NOT_STORY = ("keys", "state")
 STAGING_PREFIX = ".sksidekick-import-"
+# Rebuildable or machine-local parts of the Hermes home: never story, never in an archive.
+# hermes/.skmemory must stay empty (memory lives in memory/); serve refuses to start otherwise.
+EXCLUDE_DIRS = ("hermes/logs", "hermes/cache", "hermes/tools", "hermes/plugins", "hermes/.skmemory")
+EXCLUDE_GLOBS = ("*.lock", "*.pid")
+
+
+def excluded(rel: PurePosixPath | Path | str) -> bool:
+    """True for paths under EXCLUDE_DIRS or matching EXCLUDE_GLOBS (compared case-insensitively)."""
+    p = PurePosixPath(str(rel).replace("\\", "/"))
+    low = p.as_posix().casefold()
+    if any(low == d or low.startswith(d + "/") for d in EXCLUDE_DIRS):
+        return True
+    return any(fnmatch.fnmatch(p.name.casefold(), g) for g in EXCLUDE_GLOBS)
 
 
 def _skip(rel: Path) -> bool:
-    """Keys, state and an interrupted import's staging dir are never story."""
-    return rel.parts[0] in _NOT_STORY or rel.parts[0].startswith(STAGING_PREFIX)
+    """Keys, state, an interrupted import's staging dir and EXCLUDE are never story."""
+    return rel.parts[0] in _NOT_STORY or rel.parts[0].startswith(STAGING_PREFIX) or excluded(rel.as_posix())
 
 
 class Home:

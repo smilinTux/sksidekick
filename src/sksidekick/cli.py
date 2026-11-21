@@ -45,10 +45,14 @@ def _cmd_init(home: Home, a) -> int:
 
 
 def _cmd_export(home: Home, a) -> int:
+    creds = a.with_credentials
     if a.plain:
-        print(f"{archive.export_plain(home, Path(a.path))} files written, readable by anyone who gets this folder")
+        n = archive.export_plain(home, Path(a.path), with_credentials=creds)
+        print(f"{n} files written, readable by anyone who gets this folder")
     else:
-        print(archive.export(home, Path(a.path)))
+        print(archive.export(home, Path(a.path), with_credentials=creds))
+    if not creds:
+        print("Channel logins were left out (add --with-credentials to keep them).")
     return 0
 
 
@@ -62,6 +66,8 @@ def _cmd_verify(home: Home, a) -> int:
 def _cmd_import(home: Home, a) -> int:
     m = archive.import_archive(Path(a.path), home, phrase=_phrase_from_stdin())
     print(f"restored {len(m['files'])} files into {home.root} (archive made {m.get('created')})")
+    if m.get("redacted_keys"):
+        print(f"Log in again for: {', '.join(m['redacted_keys'])}")
     if m.get("purpose") != "move":
         print("This was a backup or export, not a move. If the original sidekick is still running, stop it: only one copy may answer.")
     return 0
@@ -148,6 +154,7 @@ def _parser() -> argparse.ArgumentParser:
     e = sub.add_parser("export", help="encrypted archive of the whole story, or --plain readable copy")
     e.add_argument("path")
     e.add_argument("--plain", action="store_true", help="write a decrypted folder instead")
+    e.add_argument("--with-credentials", action="store_true", help="keep channel logins and API keys in the export")
     e.set_defaults(fn=_cmd_export)
     v = sub.add_parser("verify", help="check an archive completely")
     v.add_argument("path")
