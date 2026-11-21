@@ -251,3 +251,16 @@ def test_default_notify_uses_hermes_send(live: Home, monkeypatch):
     (live.config_dir / "serve.json").write_text(json.dumps({"notify_to": "telegram"}))
     serve.default_notify(live)("Backup failed: x. You have no backup yet.")
     assert calls == [["hermes", "send", "--to", "telegram", "--quiet", "Backup failed: x. You have no backup yet."]]
+
+
+def test_gateway_is_never_handed_to_another_supervisor(live: Home, monkeypatch):
+    seen = {}
+
+    def fake_popen(argv, **kw):
+        seen["env"] = kw.get("env")
+        return FakeProc(argv)
+
+    monkeypatch.setattr(serve.subprocess, "Popen", fake_popen)
+    p = serve.spawn_gateway(["hermes", "gateway", "run"])
+    assert isinstance(p, FakeProc)
+    assert seen["env"]["HERMES_GATEWAY_NO_SUPERVISE"] == "1"  # the fork's s6 image would otherwise keep a gateway after a move

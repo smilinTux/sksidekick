@@ -127,6 +127,13 @@ class _Notices:
         self.last.pop(kind, None)
 
 
+def spawn_gateway(argv: list[str]):
+    """Start the gateway as OUR child. Hermes' s6 image would otherwise hand a bare ``gateway run`` to its own
+    supervisor, which keeps a gateway answering after this copy moves out; serve is the only supervisor."""
+    env = dict(os.environ, HERMES_GATEWAY_NO_SUPERVISE="1")
+    return subprocess.Popen(argv, env=env)
+
+
 def _stop_child(child) -> None:
     if child is None or child.poll() is not None:
         return
@@ -193,7 +200,7 @@ def serve(
     wall: Callable[[], _dt.datetime] = lambda: _dt.datetime.now(_dt.timezone.utc),
     sleep: Callable[[float], None] = time.sleep,
     notify: Callable[[str], None] | None = None,
-    spawn: Callable[[list[str]], object] = subprocess.Popen,
+    spawn: Callable[[list[str]], object] = spawn_gateway,
     jitter: Callable[[], float] = lambda: random.uniform(0, 600),
     stop: Callable[[], bool] = lambda: False,
 ) -> int:
