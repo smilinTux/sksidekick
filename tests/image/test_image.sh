@@ -15,7 +15,12 @@ wait_for() {  # wait_for SECONDS DESCRIPTION COMMAND...
     for _ in $(seq "$n"); do "$@" >/dev/null 2>&1 && return 0; sleep 1; done
     fail "timed out waiting for $what"
 }
-procs() { docker exec "$C" sh -c 'for p in /proc/[0-9]*/cmdline; do tr "\0" " " < "$p" 2>/dev/null; echo; done'; }
+wait_for_quiet() {  # like wait_for, but returns 1 instead of failing
+    local n="$1"; shift
+    for _ in $(seq "$n"); do "$@" >/dev/null 2>&1 && return 0; sleep 1; done
+    return 1
+}
+procs() { docker exec "$C" sh -c 'for p in /proc/[0-9]*/cmdline; do printf "%s: " "${p#/proc/}"; tr "\0" " " < "$p" 2>/dev/null; echo; done'; }
 count() { procs | grep -cE "$1" || true; }
 serve_running() { [ "$(count 'sksidekick serve')" -ge 1 ]; }
 
@@ -47,6 +52,7 @@ docker exec "$C" test -f /opt/data/sidekick/hermes/skmemory.json || fail "skmemo
 ok "the sidekick's Hermes home uses the skmemory provider"
 
 wait_for 60 "sksidekick serve" serve_running
+echo "processes matching gateway or serve while live:"; procs | grep -E 'gateway|sksidekick serve' || true
 ok "serve is supervising (a gateway with no channel set up may exit and be restarted with backoff)"
 
 docker exec "$C" sksidekick backup add-dir /opt/data/usb >/dev/null
@@ -58,8 +64,12 @@ docker logs "$C" 2>&1 | grep -qF "$phrase" && fail "the recovery phrase reached 
 ok "the phrase is not in the container log"
 
 docker exec "$C" sksidekick move-out /opt/data/move.sksk >/dev/null
-sleep 15
-[ "$(count 'gateway run|sksidekick serve')" = 0 ] || fail "serve or the gateway still runs 15 s after move-out"
+stopped() { [ "$(count 'gateway run|sksidekick serve')" = 0 ]; }
+# serve sees the move within 5 s and gives the gateway 20 s to stop cleanly (design limit: 60 s)
+if ! wait_for_quiet 40 stopped; then
+    echo "still running after move-out:"; procs | grep -E 'gateway|sksidekick serve' || true
+    fail "serve or the gateway still runs 40 s after move-out"
+fi
 docker inspect -f '{{.State.Running}}' "$C" | grep -qx true || fail "the moved-out container exited (would crash loop under a restart policy)"
 ok "move-out stops the gateway and the container idles"
 echo "all image checks passed"
