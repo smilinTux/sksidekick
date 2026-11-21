@@ -70,6 +70,10 @@ if ! wait_for_quiet 30 remembered; then
     echo "--- plugin store"; docker exec "$C" sh -c 'find /opt/data/sidekick/hermes/.skmemory 2>/dev/null | head -30' || true
     echo "--- skmemory in hermes logs"
     docker exec "$C" sh -c 'grep -rhi "skmemory" /opt/data/sidekick/hermes/logs 2>/dev/null | tail -20' || true
+    echo "--- refusals and memory warnings in every Hermes log"
+    docker exec "$C" sh -c 'grep -rhiE "refused|memory (hook|tool)|sync_turn|owner" /opt/data/sidekick/hermes/logs /opt/data/logs 2>/dev/null | tail -25' || true
+    echo "--- HERMES/SK environment seen by docker exec"
+    docker exec -u hermes "$C" sh -c 'env | grep -E "^(_?HERMES|SK|HOME=)" | sed "s/=.*KEY.*/=<redacted>/" | sort' || true
     echo "--- the same turn, verbose, plugin host at DEBUG"
     docker exec -u hermes -e OPENAI_API_KEY=stub -e CUSTOM_API_KEY=stub -e HERMES_PLUGIN_HOST_LOG_LEVEL=DEBUG "$C" \
         sidekick-hermes chat -v -Q --provider custom --base-url http://127.0.0.1:18999/v1 -m stub \
