@@ -1,0 +1,17 @@
+[Unit]
+Description=sksidekick (your sidekick, one live copy)
+After=network-online.target
+
+[Service]
+ExecStart=@APP@/bin/sidekick-start
+Environment="SKSIDEKICK_HOME=@HOME@"
+Environment="SIDEKICK_SEED=@APP@/hermes-seed"
+Environment="SIDEKICK_BIN=@APP@/sksidekick/bin"
+Environment="SIDEKICK_SKMEMORY_JSON=@APP@/skmemory.json"
+Environment="PATH=@APP@/bin:/usr/local/bin:/usr/bin:/bin"
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=40
+
+[Install]
+WantedBy=default.target
