@@ -140,6 +140,12 @@ def _cmd_move_cancel(home: Home, a) -> int:
     return 0
 
 
+def _cmd_serve(home: Home, a) -> int:
+    from sksidekick import serve
+
+    return serve.main_serve(home, a.gateway or None)
+
+
 def _cmd_status(home: Home, a) -> int:
     _print({"home": str(home.root), "instance": home.instance(), "backup": backup.status(home), "drill": drill.last_drill(home)})
     return 0
@@ -186,6 +192,9 @@ def _parser() -> argparse.ArgumentParser:
     t.set_defaults(fn=_cmd_retire)
     sub.add_parser("move-cancel", help="undo move-out; this copy answers again").set_defaults(fn=_cmd_move_cancel)
     sub.add_parser("status", help="instance, backup and drill state").set_defaults(fn=_cmd_status)
+    s = sub.add_parser("serve", help="run the gateway while this copy is live; backups and drills on schedule")
+    s.add_argument("gateway", nargs=argparse.REMAINDER, help="gateway command (default: hermes gateway run)")
+    s.set_defaults(fn=_cmd_serve)
     return p
 
 
