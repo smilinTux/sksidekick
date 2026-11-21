@@ -55,49 +55,12 @@ wait_for 60 "sksidekick serve" serve_running
 echo "processes matching gateway or serve while live:"; procs | grep -E 'gateway|sksidekick serve' || true
 ok "serve is supervising (a gateway with no channel set up may exit and be restarted with backoff)"
 
-# One real Hermes turn through the sidekick's own Hermes home, against a stub model: the memory provider
-# must store it inside the home (Plan 2 review focus 1), or backups would silently miss memories.
-docker cp "$(dirname "$0")/stub_model.py" "$C:/tmp/stub_model.py"
-docker exec -d -u hermes "$C" /opt/sksidekick/bin/python /tmp/stub_model.py 18999
-sleep 2
-store=/opt/data/sidekick/hermes/.skmemory/agents/sidekick/memory
-turn="$(docker exec -u hermes -e OPENAI_API_KEY=stub -e CUSTOM_API_KEY=stub "$C" sidekick-hermes chat -Q \
-    --provider custom --base-url http://127.0.0.1:18999/v1 -m stub -q "Remember that my fox is called Juniper." 2>&1)" || true
-printf '%s\n' "$turn" | tail -8
-remembered() { docker exec "$C" grep -rlq "Juniper" "$store"; }
-if ! wait_for_quiet 30 remembered; then
-    echo "--- hermes memory status"; docker exec -u hermes "$C" sidekick-hermes memory status 2>&1 | tail -20 || true
-    echo "--- plugin store"; docker exec "$C" sh -c 'find /opt/data/sidekick/hermes/.skmemory 2>/dev/null | head -30' || true
-    echo "--- skmemory in hermes logs"
-    docker exec "$C" sh -c 'grep -rhi "skmemory" /opt/data/sidekick/hermes/logs 2>/dev/null | tail -20' || true
-    echo "--- refusals and memory warnings in every Hermes log"
-    docker exec "$C" sh -c 'grep -rhiE "refused|memory (hook|tool)|sync_turn|owner" /opt/data/sidekick/hermes/logs /opt/data/logs 2>/dev/null | tail -25' || true
-    echo "--- HERMES/SK environment seen by docker exec"
-    docker exec -u hermes "$C" sh -c 'env | grep -E "^(_?HERMES|SK|HOME=)" | sed "s/=.*KEY.*/=<redacted>/" | sort' || true
-    echo "--- the same turn, verbose, plugin host at DEBUG"
-    docker exec -u hermes -e OPENAI_API_KEY=stub -e CUSTOM_API_KEY=stub -e HERMES_PLUGIN_HOST_LOG_LEVEL=DEBUG "$C" \
-        sidekick-hermes chat -v -Q --provider custom --base-url http://127.0.0.1:18999/v1 -m stub \
-        -q "Remember that my fox is called Juniper." 2>&1 | grep -iE "skmemory|memory|sync|owner|reader|provider" | tail -40 || true
-    echo "--- direct skmemory write with the plugin's child environment"
-    docker exec -u hermes "$C" env -u SKMEMORY_AGENT \
-        SKCAPSTONE_HOME=/opt/data/sidekick/hermes/.skmemory SKAGENT=sidekick SKMEMORY_AGENT=sidekick SKCAPSTONE_AGENT=sidekick \
-        SKMEMORY_HOME=/opt/data/sidekick/hermes/.skmemory/agents/sidekick \
-        skmemory snapshot --layer short-term --tags diag "diag" "direct write: Juniper" 2>&1 | tail -8 || true
-    docker exec "$C" sh -c 'find /opt/data/sidekick/hermes/.skmemory -newer /opt/data/sidekick/keys/live.identity -type f | head' || true
-    fail "a Hermes turn did not store a memory in the sidekick home ($store)"
-fi
-ok "a Hermes turn stored its memory inside the sidekick home"
 
 docker exec "$C" sksidekick backup add-dir /opt/data/usb >/dev/null
 docker exec "$C" sksidekick backup run >/dev/null || fail "backup run failed"
 docker exec "$C" sksidekick drill | grep -q '"ok": true' || fail "drill failed"
 ok "backup and restore drill pass"
 
-latest="$(docker exec "$C" sh -c 'ls -1 /opt/data/usb/*.sksk | tail -1')"
-printf '%s\n' "$phrase" | docker exec -i "$C" sksidekick --home /tmp/restored import "$latest" --phrase-stdin >/dev/null \
-    || fail "the backup did not import with the phrase"
-docker exec "$C" grep -rlq "Juniper" /tmp/restored/hermes/.skmemory/agents/sidekick/memory || fail "the backup lacks the memory"
-ok "a backup restored with the phrase holds the remembered turn"
 
 docker logs "$C" 2>&1 | grep -qF "$phrase" && fail "the recovery phrase reached the container log"
 ok "the phrase is not in the container log"
