@@ -8,7 +8,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-14]
+        os: [ubuntu-24.04, macos-latest]  # macos-14 is no longer offered ("macos-14-arm64-us-xl is not supported")
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
