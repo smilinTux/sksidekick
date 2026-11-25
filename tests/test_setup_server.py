@@ -6,6 +6,7 @@ import threading
 
 import pytest
 
+from sksidekick import keys
 from sksidekick.home import Home
 from sksidekick.setup import server, state
 
@@ -90,7 +91,7 @@ def test_concurrent_same_step_one_wins(running):
 
 def test_unknown_routes_are_404_json(running):
     _, port = running
-    for path in ("/api/nope", "/api/tier/nope/more", "/api/phrase/new"):
+    for path in ("/api/nope", "/api/tier/nope/more", "/api/phrase/nope"):
         status, _, data = call(port, "POST", path, cookie=TOKEN, header=TOKEN)
         assert status == 404 and "error" in json.loads(data)
 
@@ -153,8 +154,9 @@ def test_done_shuts_the_server_down(bare_home, capsys):
     port, tok = int(m.group(1)), m.group(2)
     for s in state.Steps[:3]:  # the form steps validate real input and have their own tests
         state.advance(bare_home, s)
-    for s in state.Steps[3:]:
-        assert call(port, "POST", f"/api/{s}", cookie=tok, header=tok)[0] == 200
+    keys.create_keys(bare_home)  # the phrase step has its own tests (test_setup_phrase.py)
+    state.advance(bare_home, "phrase")
+    assert call(port, "POST", "/api/backup", {"kind": "later"}, cookie=tok, header=tok)[0] == 200
     t.join(5)
     assert done["rc"] == 0
 

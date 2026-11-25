@@ -16,12 +16,13 @@ class OutOfOrder(Exception):
 
 
 class FieldError(Exception):
-    """A handler rejects one form field: the router answers 422 {field, error} and does not advance."""
+    """A handler rejects one form field: the router answers 422 {field, error, **extra} and does not advance."""
 
-    def __init__(self, field: str, message: str) -> None:
+    def __init__(self, field: str, message: str, extra: dict | None = None) -> None:
         super().__init__(message)
         self.field = field
         self.message = message
+        self.extra = extra or {}
 
 
 def _path(home: Home) -> Path:

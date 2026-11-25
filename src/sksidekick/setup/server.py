@@ -16,7 +16,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from sksidekick.home import Home
-from sksidekick.setup import channels, soul, state, tier
+from sksidekick.setup import backup_step, channels, phrase, soul, state, tier
 
 COOKIE = "setup_token"
 HEADER = "X-Setup-Token"
@@ -25,9 +25,11 @@ TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": 
 MAX_BODY = 1_000_000
 
 # (step, action) -> handler(home, body) -> dict. action is None for the plain form.
-# Later tasks register handlers here; a (step, None) handler runs before the step advances.
+# Later tasks register handlers here; a (step, None) handler runs before the step advances, and may
+# finish its step itself (backup also finishes done). An action handler that completes a step advances it.
 ROUTES: dict[tuple[str, str | None], object] = {("tier", None): tier.handle, ("channels", None): channels.handle,
-    ("personality", None): soul.handle}
+    ("personality", None): soul.handle, ("phrase", None): phrase.refuse_plain, ("phrase", "new"): phrase.new,
+    ("phrase", "confirm"): phrase.confirm, ("backup", None): backup_step.handle}
 
 _LOCK = threading.Lock()
 
@@ -126,7 +128,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._json(403, {"error": "forbidden"})
             extra = {"Set-Cookie": f"{COOKIE}={self.server.token}; HttpOnly; SameSite=Strict; Path=/"}
         if url.path == "/api/state":
-            out = {**state.load(self.server.home), "tiers": tier.tiers_state(), "channels": channels.channels_state(self.server.home), **soul.personality_state()}
+            out = {**state.load(self.server.home), "tiers": tier.tiers_state(), "channels": channels.channels_state(self.server.home), **soul.personality_state(),
+                   "backup_warning": backup_step.warning(self.server.home)}
             return self._send(200, json.dumps(out).encode(), "application/json", extra)
         rel = "index.html" if url.path == "/" else url.path[len("/static/"):] if url.path.startswith("/static/") else None
         f = (STATIC / rel).resolve() if rel else None
@@ -173,11 +176,11 @@ class _Handler(BaseHTTPRequestHandler):
                     msg = "that step is already done" if already else "finish the earlier step first"
                     return self._json(409, {"error": msg})
                 result = handler(home, body) if handler else {}
-                if action is None:
+                if action is None and state.load(home)["next"] == step:
                     state.advance(home, step)
                 finished = state.is_complete(home)
         except state.FieldError as e:
-            return self._json(422, {"field": e.field, "error": e.message})
+            return self._json(422, {**e.extra, "field": e.field, "error": e.message})
         except Exception:  # no detail, no traceback: a handler may hold the recovery phrase
             return self._json(500, {"error": "internal error"})
         if finished:
@@ -198,13 +201,17 @@ def main_setup(home: Home, host: str = "127.0.0.1", port: int = 8765) -> int:
     if (inst.exists() and not setup.exists()) or (setup.exists() and state.is_complete(home)):
         print(f"{home.root} is already set up", file=sys.stderr)
         return 1
+    phrase.on_start(home)  # keys from a setup that died before its phrase was confirmed
     token = secrets.token_urlsafe(32)
-    srv = make_server(home, host, port, token)
-    print(f"Open http://{host}:{srv.server_address[1]}/?t={token}", flush=True)
     try:
-        srv.serve_forever()
-    except KeyboardInterrupt:
-        return 130
+        srv = make_server(home, host, port, token)
+        print(f"Open http://{host}:{srv.server_address[1]}/?t={token}", flush=True)
+        try:
+            srv.serve_forever()
+        except KeyboardInterrupt:
+            return 130
+        finally:
+            srv.server_close()
     finally:
-        srv.server_close()
+        phrase.on_stop(home)  # an unconfirmed phrase and its keys never outlive the server
     return 0

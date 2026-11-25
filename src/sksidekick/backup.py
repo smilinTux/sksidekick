@@ -35,7 +35,7 @@ def _state_path(home: Home) -> Path:
 
 def load_config(home: Home) -> dict:
     p = _config_path(home)
-    cfg = dict(DEFAULTS)
+    cfg = json.loads(json.dumps(DEFAULTS))  # a deep copy: callers append to cfg["destinations"]
     if p.exists():
         cfg.update(json.loads(p.read_text()))
     return cfg
