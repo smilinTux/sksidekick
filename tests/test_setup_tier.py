@@ -278,7 +278,7 @@ def test_first_run_success_with_strict_fake(bare_home, fake_hermes):
 
 def test_restore_error_does_not_mask_original(bare_home, fake_hermes, monkeypatch):
     monkeypatch.setenv("FAKE_HERMES_FAIL_SET", "2")
-    monkeypatch.setattr(hermes_config, "_write_private", lambda *a: (_ for _ in ()).throw(OSError("disk")))
+    monkeypatch.setattr(hermes_config, "write_private", lambda *a: (_ for _ in ()).throw(OSError("disk")))
     (bare_home.hermes_dir).mkdir(parents=True)
     (bare_home.hermes_dir / ".env").write_text("A=1\n")
     with pytest.raises(hermes_config.HermesError):

@@ -16,7 +16,7 @@ class HermesError(RuntimeError):
     """`hermes` could not be run or refused a setting. The message never carries command output."""
 
 
-def _config_set(home: Home, key: str, value: str) -> None:
+def config_set(home: Home, key: str, value: str) -> None:
     env = {**os.environ, "HERMES_HOME": str(home.hermes_dir)}
     try:
         subprocess.run(
@@ -79,7 +79,7 @@ def env_keys(home: Home) -> set[str]:
     return {k.strip() for k, _, v in (ln.partition("=") for ln in text.splitlines()) if v.strip()}
 
 
-def _write_private(path: Path, data: bytes) -> None:
+def write_private(path: Path, data: bytes) -> None:
     tmp = path.with_name(path.name + ".tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "wb") as f:
@@ -88,17 +88,17 @@ def _write_private(path: Path, data: bytes) -> None:
     os.replace(tmp, path)
 
 
-def _snapshot(paths: list[Path]) -> dict[Path, bytes | None]:
+def snapshot(paths: list[Path]) -> dict[Path, bytes | None]:
     return {p: (p.read_bytes() if p.exists() else None) for p in paths}
 
 
-def _restore(snap: dict[Path, bytes | None]) -> None:
+def restore(snap: dict[Path, bytes | None]) -> None:
     for p, data in snap.items():
         try:
             if data is None:
                 p.unlink(missing_ok=True)
             else:
-                _write_private(p, data)
+                write_private(p, data)
         except OSError:
             pass  # never let a restore failure replace the original error
 
@@ -106,15 +106,15 @@ def _restore(snap: dict[Path, bytes | None]) -> None:
 def set_model(home: Home, *, base_url: str, model: str, api_key: str | None) -> None:
     """All or nothing as far as practical: config first, .env last, both files restored byte for byte on failure."""
     state.ensure_hermes_dir(home)
-    snap = _snapshot([home.hermes_dir / "config.yaml", _env_path(home)])
+    snap = snapshot([home.hermes_dir / "config.yaml", _env_path(home)])
     try:
-        _config_set(home, "model.provider", "custom")
-        _config_set(home, "model.base_url", base_url)
-        _config_set(home, "model.default", model)
+        config_set(home, "model.provider", "custom")
+        config_set(home, "model.base_url", base_url)
+        config_set(home, "model.default", model)
         if api_key:
             set_env(home, KEY_VAR, api_key)
         else:
             _rewrite_env(home, KEY_VAR, None)  # a key from an earlier choice must not outlive it
     except BaseException:
-        _restore(snap)
+        restore(snap)
         raise

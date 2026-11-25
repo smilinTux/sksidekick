@@ -36,6 +36,21 @@ def _same(a: str, b: str) -> bool:
     return hmac.compare_digest(a.encode(), b.encode())
 
 
+def _range(header: str | None, total: int):
+    """None: serve everything (no or unusable header, or several ranges). "bad": 416. Else (first, last)."""
+    if not header or not header.startswith("bytes=") or "," in header:
+        return None
+    first, dash, last = header[6:].strip().partition("-")
+    if not dash or not (first.isdigit() or first == "") or not (last.isdigit() or last == "") or not (first or last):
+        return None
+    if first == "":
+        n = int(last)
+        return "bad" if n == 0 or total == 0 else (max(total - n, 0), total - 1)
+    a = int(first)
+    b = min(int(last), total - 1) if last else total - 1
+    return "bad" if a >= total or b < a else (a, b)
+
+
 class _Server(ThreadingHTTPServer):
     daemon_threads = True
 
@@ -117,7 +132,16 @@ class _Handler(BaseHTTPRequestHandler):
         f = (STATIC / rel).resolve() if rel else None
         if f is None or STATIC.resolve() not in f.parents or not f.is_file():
             return self._json(404, {"error": "not found"})
-        self._send(200, f.read_bytes(), TYPES.get(f.suffix, "application/octet-stream"), extra)
+        data, ctype = f.read_bytes(), TYPES.get(f.suffix, "application/octet-stream")
+        extra = {**(extra or {}), "Accept-Ranges": "bytes"}
+        rng = _range(self.headers.get("Range"), len(data))
+        if rng is None:
+            return self._send(200, data, ctype, extra)
+        if rng == "bad":
+            return self._send(416, json.dumps({"error": "range not satisfiable"}).encode(), "application/json",
+                              {**extra, "Content-Range": f"bytes */{len(data)}"})
+        a, b = rng
+        self._send(206, data[a:b + 1], ctype, {**extra, "Content-Range": f"bytes {a}-{b}/{len(data)}"})
 
     def do_POST(self) -> None:
         header = self.headers.get(HEADER, "")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import http.client
 import json
 import re
 import stat
@@ -83,7 +84,7 @@ def test_switch_keeps_memory(bare_home, fake_hermes):
 def test_audio_served(running):
     home, port = running
     files = sorted((soul.STATIC_AUDIO).glob("*.mp3"))
-    assert len(files) == 8 and all(f.stat().st_size < 200_000 for f in files)
+    assert len(files) == 8 and all(f.stat().st_size < 100_000 for f in files)
     status, headers, data = call(port, "GET", "/static/audio/companion-female.mp3", cookie=TOKEN)
     assert status == 200 and headers["Content-Type"] == "audio/mpeg"
     assert data == (soul.STATIC_AUDIO / "companion-female.mp3").read_bytes()
@@ -136,3 +137,50 @@ def test_failed_first_write_leaves_nothing(at_personality, fake_hermes, monkeypa
     assert status == 422
     assert not (home.soul_dir / "personality.json").exists() and not (home.hermes_dir / "SOUL.md").exists()
     assert not (home.hermes_dir / "config.yaml").exists() or json.loads((home.hermes_dir / "config.yaml").read_text()) == {}
+
+
+def _get(port, path, rng):
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    c.request("GET", path, headers={"Cookie": f"setup_token={TOKEN}", "Range": rng})
+    r = c.getresponse()
+    out = (r.status, dict(r.getheaders()), r.read())
+    c.close()
+    return out
+
+
+MP3 = "/static/audio/companion-female.mp3"
+
+
+def test_accept_ranges_on_200(running):
+    _, port = running
+    status, headers, _ = call(port, "GET", MP3, cookie=TOKEN)
+    assert status == 200 and headers["Accept-Ranges"] == "bytes"
+
+
+def test_range_206(running):
+    _, port = running
+    full = (soul.STATIC_AUDIO / "companion-female.mp3").read_bytes()
+    status, headers, data = _get(port, MP3, "bytes=0-99")
+    assert status == 206 and data == full[:100] and headers["Content-Length"] == "100"
+    assert headers["Content-Range"] == f"bytes 0-99/{len(full)}" and headers["Content-Type"] == "audio/mpeg"
+    assert headers["Referrer-Policy"] == "no-referrer"
+    status, headers, data = _get(port, MP3, "bytes=-50")
+    assert status == 206 and data == full[-50:] and headers["Content-Range"] == f"bytes {len(full) - 50}-{len(full) - 1}/{len(full)}"
+    status, _, data = _get(port, MP3, f"bytes={len(full) - 10}-")
+    assert status == 206 and data == full[-10:]
+    assert _get(port, MP3, "bytes=0-1,5-9")[0] == 200
+
+
+def test_range_416(running):
+    _, port = running
+    size = (soul.STATIC_AUDIO / "companion-female.mp3").stat().st_size
+    status, headers, _ = _get(port, MP3, f"bytes={size}-")
+    assert status == 416 and headers["Content-Range"] == f"bytes */{size}"
+    assert _get(port, MP3, "bytes=-0")[0] == 416
+
+
+def test_range_still_needs_token(running):
+    _, port = running
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    c.request("GET", MP3, headers={"Range": "bytes=0-9"})
+    assert c.getresponse().status == 403

@@ -38,14 +38,14 @@ def write_soul(home: Home, personality: str, voice: str) -> None:
     home.soul_dir.mkdir(parents=True, exist_ok=True)
     pj = home.soul_dir / "personality.json"
     paths = [home.hermes_dir / "config.yaml", home.hermes_dir / "SOUL.md", pj]
-    snap = hermes_config._snapshot(paths)
+    snap = hermes_config.snapshot(paths)
     try:
-        hermes_config._write_private(pj, json.dumps({"type": personality, "voice": voice, "version": VERSION}).encode())
-        hermes_config._write_private(home.hermes_dir / "SOUL.md", _render(p, voice).encode())
-        hermes_config._config_set(home, "tts.provider", "piper")
-        hermes_config._config_set(home, "tts.piper.voice", content.VOICES[voice])
+        hermes_config.write_private(pj, json.dumps({"type": personality, "voice": voice, "version": VERSION}).encode())
+        hermes_config.write_private(home.hermes_dir / "SOUL.md", _render(p, voice).encode())
+        hermes_config.config_set(home, "tts.provider", "piper")
+        hermes_config.config_set(home, "tts.piper.voice", content.VOICES[voice])
     except BaseException:
-        hermes_config._restore(snap)
+        hermes_config.restore(snap)
         raise
 
 
