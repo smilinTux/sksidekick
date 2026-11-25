@@ -9,12 +9,19 @@ so it is shredded when a new phrase is asked for, after 3 wrong confirms, after 
 when the server stops, and when the server starts and finds one left over (a crash or kill -9).
 Once the phrase step is confirmed nothing here touches the keys again.
 
+Only keys this process made are ever shredded: ``phrase/new`` records the sha256 of the wrapped key it
+wrote, and a shred happens only while the file on disk still matches. Keys made by ``sksidekick init`` or
+``import`` (which the container and the docs still offer beside setup) are never touched. ``on_start``
+has no record, so it shreds only a key set it can prove is a dead setup's: setup.json exists, the phrase
+step is not confirmed, and there is no instance.json.
+
 ``check`` indices are 0-based positions among the 8 groups; confirm uses the same numbering, as
 strings (JSON object keys): ``{"groups": {"2": "ABCDE", "6": "FGHJK"}}``.
 """
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import secrets
 import sys
@@ -47,6 +54,7 @@ class _Pending:
 
 _PENDING: dict[str, _Pending] = {}  # str(home.root) -> the phrase waiting for its confirm
 _STOPPED: set[str] = set()  # homes whose server has stopped: no new keys after the stop shred
+_CREATED: dict[str, str] = {}  # str(home.root) -> sha256 of the wrapped key phrase/new wrote in this process
 
 
 def _confirmed(home: Home) -> bool:
@@ -60,11 +68,27 @@ def _drop(home: Home) -> None:
         p.timer.cancel()
 
 
+def _digest(home: Home) -> str | None:
+    try:
+        return hashlib.sha256((home.keys_dir / keys.WRAPPED).read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def _ours(home: Home) -> bool:
+    """True while the key set on disk is the one phrase/new made in this process."""
+    want = _CREATED.get(str(home.root))
+    return want is not None and _digest(home) == want
+
+
 def _shred_unconfirmed(home: Home) -> None:
-    """Drop the phrase and destroy the keys, unless the phrase step is already confirmed (caller holds _LOCK)."""
+    """Drop the phrase and destroy the keys this process made, unless the phrase step is already confirmed
+    (caller holds _LOCK). Keys from anywhere else are left alone."""
     _drop(home)
-    if not _confirmed(home):
+    if not _confirmed(home) and _ours(home):
         keys.shred_keys(home)
+    if not _ours(home):
+        _CREATED.pop(str(home.root), None)
 
 
 def _expire(home: Home, pending: _Pending) -> None:
@@ -84,12 +108,17 @@ def new(home: Home, body: dict) -> dict:
     with _LOCK:
         if str(home.root) in _STOPPED:
             raise state.Conflict("setup is stopping; start it again")
-        _shred_unconfirmed(home)  # a refresh, or keys left behind: the old phrase is gone for good
+        _shred_unconfirmed(home)  # a refresh: the old phrase is gone for good
+        if home.keys_dir.is_dir() and any(home.keys_dir.iterdir()):
+            raise state.Conflict("this sidekick already has keys (made by sksidekick init or import)")
         try:
             p = keys.create_keys(home)
+        except FileExistsError:  # another process wrote keys in between: they are not ours to shred
+            raise state.Conflict("this sidekick already has keys (made by sksidekick init or import)") from None
         except BaseException:
             keys.shred_keys(home)  # a half-made key set must not outlive this call
             raise
+        _CREATED[str(home.root)] = _digest(home) or ""
         pending = _Pending(groups=p.split("-"), check=sorted(_RANDOM.sample(range(keys.GROUPS), 2)))
         pending.timer = threading.Timer(TIMEOUT, _expire, args=(home, pending))
         pending.timer.daemon = True
@@ -125,10 +154,16 @@ def refuse_plain(home: Home, body: dict) -> dict:
 
 
 def on_start(home: Home) -> None:
-    """Keys left by a setup that died before the confirm (a crash, kill -9) cannot be trusted: shred them."""
+    """Keys left by a setup that died before the confirm (a crash, kill -9) cannot be trusted: shred them.
+    Only when that is provably what they are: setup progress exists, the phrase step is not confirmed, and
+    no instance.json says init or import made this home live."""
     with _LOCK:
         _STOPPED.discard(str(home.root))
-        _shred_unconfirmed(home)
+        _drop(home)
+        _CREATED.pop(str(home.root), None)
+        dead_setup = (home.state_dir / "setup.json").exists() and not (home.state_dir / "instance.json").exists()
+        if dead_setup and not _confirmed(home):
+            keys.shred_keys(home)
 
 
 def on_stop(home: Home) -> None:

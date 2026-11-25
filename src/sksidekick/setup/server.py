@@ -24,6 +24,7 @@ HEADER = "X-Setup-Token"
 STATIC = Path(__file__).parent / "static"
 TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".mp3": "audio/mpeg"}
 MAX_BODY = 1_000_000
+WATCH_INTERVAL = 1.0  # seconds between looks for an instance.json made by `sksidekick init` or `import`
 
 # (step, action) -> handler(home, body) -> dict. action is None for the plain form.
 # Later tasks register handlers here; a (step, None) handler runs before the step advances, and may
@@ -170,6 +171,8 @@ class _Handler(BaseHTTPRequestHandler):
         home = self.server.home
         try:
             with _LOCK:
+                if (home.state_dir / "instance.json").exists():  # init or import made it live meanwhile
+                    return self._json(409, {"error": "this sidekick is already set up"})
                 try:
                     state.check(home, step)
                 except state.OutOfOrder:
@@ -228,6 +231,28 @@ def make_server(home: Home, host: str, port: int, token: str) -> ThreadingHTTPSe
     return srv
 
 
+def _made_elsewhere(home: Home) -> bool:
+    """instance.json exists but setup did not finish: `sksidekick init` or `import` made this home."""
+    with _LOCK:  # the backup step writes instance.json and finishes setup under this lock
+        try:
+            return (home.state_dir / "instance.json").exists() and not state.is_complete(home)
+        except (OSError, ValueError):
+            return False
+
+
+def _watch(home: Home, srv: ThreadingHTTPServer, stop: threading.Event) -> None:
+    while not stop.wait(WATCH_INTERVAL):
+        if _made_elsewhere(home):
+            print("A sidekick was made here another way (sksidekick init or import); setup has closed.", flush=True)
+            srv.shutdown()
+            return
+
+
+def _shown_host(host: str) -> str:
+    """A container binds every address; the person opens it on loopback (the port is published there)."""
+    return "127.0.0.1" if host in ("", "0.0.0.0", "::") else host
+
+
 def main_setup(home: Home, host: str = "127.0.0.1", port: int = 8765) -> int:
     inst = home.state_dir / "instance.json"
     setup = home.state_dir / "setup.json"
@@ -240,10 +265,13 @@ def main_setup(home: Home, host: str = "127.0.0.1", port: int = 8765) -> int:
     try:
         _catch_stop_signals(previous)
         srv = make_server(home, host, port, token)
-        print(f"Open http://{host}:{srv.server_address[1]}/?t={token}", flush=True)
+        print(f"Open http://{_shown_host(host)}:{srv.server_address[1]}/?t={token}", flush=True)
+        stop = threading.Event()
+        threading.Thread(target=_watch, args=(home, srv, stop), daemon=True).start()
         try:
             srv.serve_forever()
         finally:
+            stop.set()
             srv.server_close()
     except KeyboardInterrupt:
         return 130
