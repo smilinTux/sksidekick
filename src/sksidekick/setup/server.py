@@ -16,17 +16,18 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from sksidekick.home import Home
-from sksidekick.setup import channels, state, tier
+from sksidekick.setup import channels, soul, state, tier
 
 COOKIE = "setup_token"
 HEADER = "X-Setup-Token"
 STATIC = Path(__file__).parent / "static"
-TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml"}
+TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".mp3": "audio/mpeg"}
 MAX_BODY = 1_000_000
 
 # (step, action) -> handler(home, body) -> dict. action is None for the plain form.
 # Later tasks register handlers here; a (step, None) handler runs before the step advances.
-ROUTES: dict[tuple[str, str | None], object] = {("tier", None): tier.handle, ("channels", None): channels.handle}
+ROUTES: dict[tuple[str, str | None], object] = {("tier", None): tier.handle, ("channels", None): channels.handle,
+    ("personality", None): soul.handle}
 
 _LOCK = threading.Lock()
 
@@ -110,7 +111,7 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._json(403, {"error": "forbidden"})
             extra = {"Set-Cookie": f"{COOKIE}={self.server.token}; HttpOnly; SameSite=Strict; Path=/"}
         if url.path == "/api/state":
-            out = {**state.load(self.server.home), "tiers": tier.tiers_state(), "channels": channels.channels_state(self.server.home)}
+            out = {**state.load(self.server.home), "tiers": tier.tiers_state(), "channels": channels.channels_state(self.server.home), **soul.personality_state()}
             return self._send(200, json.dumps(out).encode(), "application/json", extra)
         rel = "index.html" if url.path == "/" else url.path[len("/static/"):] if url.path.startswith("/static/") else None
         f = (STATIC / rel).resolve() if rel else None
