@@ -1,7 +1,8 @@
 // First-run setup page. No framework, no build step, nothing from the internet.
 // Every URL is relative (the page may sit under a path prefix). The setup token is read from the
-// address once, kept only in this variable, and dropped from the address bar. The recovery phrase
-// lives only on the phrase screen, and only until that screen is left or confirmed.
+// address (or, after a reload, from this tab's sessionStorage, gone when the tab closes) and dropped
+// from the address bar. The recovery phrase lives only on the phrase screen, in memory and the DOM,
+// and only until that screen is left or confirmed; it is never stored anywhere.
 "use strict";
 
 (function () {
@@ -14,7 +15,14 @@
   };
   const SECRET = /PASSWORD|TOKEN|KEY/;
 
-  let token = new URLSearchParams(location.search).get("t") || "";
+  const TOKEN_KEY = "sksidekick-setup-token";
+  const OPEN_KEY = "sksidekick-phrase-open"; // a flag only: the phrase screen was showing groups
+  // sessionStorage may be blocked (private mode, policy): then the token lives in memory only.
+  function stored(k) { try { return sessionStorage.getItem(k) || ""; } catch (e) { return ""; } }
+  function store(k, v) { try { if (v) sessionStorage.setItem(k, v); else sessionStorage.removeItem(k); } catch (e) { /* memory only */ } }
+
+  let token = new URLSearchParams(location.search).get("t") || stored(TOKEN_KEY);
+  store(TOKEN_KEY, token);
   history.replaceState(null, "", location.pathname + location.hash);
 
   let st = null; // the last GET api/state
@@ -61,7 +69,7 @@
       return null;
     }
     if (r.ok) return r;
-    if (r.status === 403) { token = ""; show("lost"); return null; }
+    if (r.status === 403) { token = ""; store(TOKEN_KEY, ""); show("lost"); return null; }
     if (r.status === 409) {
       await refresh();
       say(r.body.error || "That step is already done.");
@@ -97,7 +105,7 @@
   function done(step) { return !!st && st.completed.indexOf(step) >= 0; }
 
   function show(name) {
-    if (current === "phrase" && name !== "phrase") forgetPhrase();
+    if (current === "phrase" && name !== "phrase") { forgetPhrase(); store(OPEN_KEY, ""); }
     document.querySelectorAll(".screen").forEach(function (s) { s.hidden = true; });
     say("");
     const section = byId("s-" + name);
@@ -140,11 +148,13 @@
   async function refresh() {
     let r;
     try { r = await get("api/state"); } catch (e) { show("gone"); return false; }
-    if (r.status === 403) { show("lost"); return false; }
+    if (r.status === 403) { token = ""; store(TOKEN_KEY, ""); show("lost"); return false; }
     if (!r.ok) { show("gone"); return false; }
     st = r.body;
     render();
     show(st.next && st.next !== "done" ? st.next : "done");
+    // a reload while the groups were on screen: the old phrase is gone (the server shreds its key), show a new one
+    if (current === "phrase" && !done("phrase") && stored(OPEN_KEY)) newPhrase();
     return true;
   }
 
@@ -348,15 +358,18 @@
     $("btn-phrase-written").focus();
   }
 
-  $("btn-phrase-show").addEventListener("click", async function () {
+  async function newPhrase() {
     clearErrors($("s-phrase"));
     forgetPhrase();
     const r = await send("api/phrase/new", {}, "phrase");
-    if (!r || !r.ok) return;
+    if (!r || !r.ok) { store(OPEN_KEY, ""); return; }
     held = { groups: String(r.body.phrase).split("-"), check: r.body.check.slice() };
     r.body.phrase = "";
+    store(OPEN_KEY, "1");
     showGroups();
-  });
+  }
+
+  $("btn-phrase-show").addEventListener("click", newPhrase);
 
   $("btn-phrase-written").addEventListener("click", function () {
     hideGroups();
@@ -379,9 +392,10 @@
     groups[String(held.check[0])] = $("f-g1").value;
     groups[String(held.check[1])] = $("f-g2").value;
     const r = await send("api/phrase/confirm", { groups: groups }, "groups");
-    if (r && r.ok) { forgetPhrase(); await refresh(); return; }
+    if (r && r.ok) { forgetPhrase(); store(OPEN_KEY, ""); await refresh(); return; }
     if (r && r.body && r.body.new_phrase_needed) {
       forgetPhrase();
+      store(OPEN_KEY, "");
       const m = $("err-phrase");
       m.textContent = "That phrase was thrown away after too many tries. Show a new one and write it down again.";
       m.hidden = false;
@@ -417,6 +431,8 @@
       $("done-warning").hidden = false;
     }
     st.completed = STEPS.slice();
+    token = "";
+    store(TOKEN_KEY, "");
     show("done"); // setup has shut down: no more requests
   });
 

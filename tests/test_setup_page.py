@@ -79,8 +79,19 @@ def test_post_always_sends_the_token_header():
     for at in posts:
         window = js[max(0, at - 300): at + 300]
         assert "\"X-Setup-Token\": token" in window
-    assert "localStorage" not in js and "sessionStorage" not in js and "document.cookie" not in js
+    assert "localStorage" not in js and "document.cookie" not in js
     assert "history.replaceState" in js and "location.search" in js
+
+
+def test_token_kept_per_tab_and_nothing_else_stored():
+    """The token survives a reload in sessionStorage (per tab); every access is guarded; the phrase never goes there."""
+    js = _read("setup.js")
+    lines = [ln for ln in js.splitlines() if "sessionStorage" in ln and not ln.lstrip().startswith("//")]
+    assert lines, "the token is not kept for a reload"
+    assert all("try {" in ln and "catch" in ln for ln in lines), lines
+    keys = re.findall(r"\bstore\(\s*([A-Za-z_]+)", js)
+    assert keys and set(keys) <= {"TOKEN_KEY", "OPEN_KEY"}, keys
+    assert re.search(r"get\(\"t\"\)\s*\|\|\s*stored\(TOKEN_KEY\)", js), "?t= first, then sessionStorage"
 
 
 def test_phrase_never_logged_or_stored_by_the_page():
