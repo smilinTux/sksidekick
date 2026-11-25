@@ -68,8 +68,8 @@ def advance(home: Home, step: str) -> None:
 
 
 def ensure_hermes_dir(home: Home) -> Path:
-    """Anything that writes under <home>/hermes calls this first: the dir is private (0700)."""
-    d = home.hermes_dir
-    d.mkdir(parents=True, exist_ok=True)
-    os.chmod(d, 0o700)
-    return d
+    """Anything that writes under <home>/hermes calls this first: the dir is private (0700), and it holds
+    the Hermes seed files (see setup.seed) before setup's own settings are layered on them."""
+    from sksidekick.setup import seed
+
+    return seed.seed_files(home)

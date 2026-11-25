@@ -156,9 +156,14 @@ if [ -z "$no_init" ] && [ "$mode" != init ] && [ ! -f "$home/state/instance.json
     echo "Setup runs here until you finish it in the browser. Ctrl-C stops it; start it again with:"
     echo "    sksidekick --home \"$home\" setup --port 0"
     set +e
-    # PATH: setup writes the model choice with this install's own hermes. Port 0: any free loopback port
-    # (the address is printed and opened, so it need not be fixed; 8765 may be taken on this computer).
-    PATH="$app/bin:$PATH" "$app/bin/sksidekick" --home "$home" setup --port 0 | while IFS= read -r line; do
+    # Setup runs with the service's own environment (packaging/sksidekick.service, io.skworld.sksidekick.plist,
+    # plus the HERMES_HOME sidekick-start exports), so `hermes config set` finds this install's Hermes and the
+    # first step seeds from this install's Hermes seed. tests/test_packaging_env.py keeps the copies equal.
+    # Port 0: any free loopback port (the address is printed and opened; 8765 may be taken here).
+    if [ "$(uname -s)" = Darwin ]; then svc_path="$app/bin:/usr/bin:/bin:/usr/sbin:/sbin"; else svc_path="$app/bin:/usr/local/bin:/usr/bin:/bin"; fi
+    env PATH="$svc_path" SKSIDEKICK_HOME="$home" SIDEKICK_SEED="$app/hermes-seed" SIDEKICK_BIN="$app/sksidekick/bin" \
+        SIDEKICK_SKMEMORY_JSON="$app/skmemory.json" HERMES_HOME="$home/hermes" \
+        "$app/bin/sksidekick" --home "$home" setup --port 0 | while IFS= read -r line; do
         case "$line" in
             "Open http"*) open_url "${line#Open }" ;;
             *) printf '%s\n' "$line" ;;

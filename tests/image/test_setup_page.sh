@@ -63,6 +63,11 @@ docker exec -u hermes "$C" mkdir -p /opt/data/usb
 wait_for 20 "the stub model" docker exec "$C" /opt/sksidekick/bin/python -c \
     'import urllib.request; urllib.request.urlopen("http://127.0.0.1:18999/v1/models", timeout=2)'
 
+# A seed setting must survive setup: setup layers its choices on the seeded config.yaml, as after init.
+docker exec -u hermes -e HERMES_HOME=/opt/data "$C" hermes config set terminal.timeout 177 >/dev/null \
+    || fail "could not set a marker in the Hermes seed"
+docker exec "$C" test ! -e /opt/data/sidekick/hermes || fail "the sidekick's Hermes home exists before any setup step"
+
 exec 4>&1
 phrase="$(SETUP_WALK_BACKUP_DIR=/opt/data/usb bash "$here/../setup_walk.sh" "$base" "$tok" 3>&1 1>&4)" \
     || fail "the setup walk failed"
@@ -74,6 +79,13 @@ wait_for 60 "sksidekick serve" serve_running
 wait_for 20 "setup to stop listening" sh -c "! curl -s -o /dev/null '$base/'"
 docker exec "$C" sh -c 'stat -c %U /opt/data/sidekick/keys/live.identity' | grep -qx hermes || fail "keys are not owned by hermes"
 ok "setup closed and serve is running"
+
+docker exec -u hermes "$C" sidekick-hermes config get terminal.timeout 2>/dev/null | grep -qx 177 \
+    || fail "the seed's terminal.timeout did not survive setup"
+docker exec -u hermes "$C" sidekick-hermes config get model.default 2>/dev/null | grep -qx stub \
+    || fail "setup's model choice is not in the sidekick's Hermes config"
+wait_for 30 "memory.provider skmemory" sh -c "docker exec -u hermes '$C' sidekick-hermes config get memory.provider | grep -qx skmemory"
+ok "setup layered on the Hermes seed (seed setting kept, model chosen, skmemory provider)"
 
 patterns="$(printf '%s\n%s\n' "$phrase" "$(printf '%s' "$phrase" | tr -d -)")"
 if printf '%s\n' "$patterns" | docker exec -i "$C" grep -rlF -f - /opt/data >/dev/null 2>&1; then
