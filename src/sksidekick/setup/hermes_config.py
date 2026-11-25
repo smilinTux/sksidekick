@@ -53,12 +53,43 @@ def set_env(home: Home, key: str, value: str) -> None:
     _rewrite_env(home, key, value)
 
 
+def _config_get(home: Home, key: str) -> str:
+    env = {**os.environ, "HERMES_HOME": str(home.hermes_dir)}
+    try:
+        r = subprocess.run(["hermes", "config", "get", key], env=env, check=True, capture_output=True, timeout=60, text=True)
+    except (OSError, subprocess.SubprocessError):
+        raise HermesError(f"could not run `hermes config get {key}`") from None
+    return r.stdout.strip()
+
+
 def set_model(home: Home, *, base_url: str, model: str, api_key: str | None) -> None:
+    """All or nothing as far as practical: config first (restored on failure), .env last."""
     state.ensure_hermes_dir(home)
-    if api_key:
-        set_env(home, KEY_VAR, api_key)
-    else:
-        _rewrite_env(home, KEY_VAR, None)  # a key from an earlier choice must not outlive it
-    _config_set(home, "model.provider", "custom")
-    _config_set(home, "model.base_url", base_url)
-    _config_set(home, "model.default", model)
+    new = {"model.provider": "custom", "model.base_url": base_url, "model.default": model}
+    before = {k: _config_get(home, k) for k in new}
+    env_path = _env_path(home)
+    env_before = env_path.read_bytes() if env_path.exists() else None
+    done: list[str] = []
+    try:
+        for k, v in new.items():
+            _config_set(home, k, v)
+            done.append(k)
+        if api_key:
+            set_env(home, KEY_VAR, api_key)
+        else:
+            _rewrite_env(home, KEY_VAR, None)  # a key from an earlier choice must not outlive it
+    except BaseException:
+        for k in done + [k for k in new if k not in done][:1]:  # the failed set may have half applied
+            try:
+                _config_set(home, k, before[k])
+            except HermesError:
+                pass
+        if env_before is None:
+            env_path.unlink(missing_ok=True)
+        else:
+            tmp = env_path.with_name(env_path.name + ".tmp")
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "wb") as f:
+                f.write(env_before)
+            os.replace(tmp, env_path)
+        raise

@@ -68,6 +68,11 @@ def load():
     except FileNotFoundError:
         return {{}}
 if argv[:2] == ["config", "set"] and len(argv) == 4:
+    n = int(open(store + ".n").read() or 0) + 1 if os.path.exists(store + ".n") else 1
+    open(store + ".n", "w").write(str(n))
+    if str(n) == os.environ.get("FAKE_HERMES_FAIL_SET"):
+        sys.stderr.write("sk-secret refused\\n")
+        sys.exit(1)
     data = load()
     data[argv[2]] = argv[3]
     json.dump(data, open(store, "w"))

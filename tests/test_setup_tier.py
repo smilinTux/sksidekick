@@ -152,3 +152,102 @@ def test_bad_fields_are_422(running, fake_hermes):
     assert post(port, "/api/tier", {"tier": "own", "base_url": "http://127.0.0.1:1/v1", "model": "m"})[1]["field"] == "api_key"
     assert post(port, "/api/tier", {"tier": "own", "base_url": "http://127.0.0.1:1/v1", "model": "m", "api_key": "a\nb"})[1]["field"] == "api_key"
     assert fake_hermes.calls() == []
+
+
+def test_failure_on_second_set_restores_everything(running, fake_hermes, monkeypatch):
+    home, port = running
+    hermes_config.set_model(home, base_url="http://old/v1", model="old", api_key="sk-old")
+    old_store = fake_hermes.store.read_text()
+    old_env = (home.hermes_dir / ".env").read_text()
+    n = int((fake_hermes.store.parent / "hermes-config.json.n").read_text())
+    monkeypatch.setenv("FAKE_HERMES_FAIL_SET", str(n + 2))
+    import http.server
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    up = http.server.HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=up.serve_forever, daemon=True).start()
+    try:
+        base = f"http://127.0.0.1:{up.server_address[1]}/v1"
+        status, body = post(port, "/api/tier", {"tier": "own", "base_url": base, "model": "new", "api_key": "sk-new"})
+    finally:
+        up.shutdown()
+        up.server_close()
+    assert status == 422 and body["field"] == "model"
+    assert "sk-" not in json.dumps(body)
+    assert json.loads(fake_hermes.store.read_text()) == json.loads(old_store)
+    assert (home.hermes_dir / ".env").read_text() == old_env
+    assert json.loads(call(port, "GET", "/api/state", cookie=TOKEN)[2])["completed"] == []
+
+
+def test_non_http_answer_is_unreachable(running, fake_hermes):
+    import socket
+
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    s.listen(1)
+
+    def serve():
+        c, _ = s.accept()
+        c.sendall(b"SSH-2.0-OpenSSH_9\r\n")
+        c.close()
+
+    threading.Thread(target=serve, daemon=True).start()
+    home, port = running
+    status, body = post(port, "/api/tier", {"tier": "private", "base_url": f"http://127.0.0.1:{s.getsockname()[1]}/v1", "model": "m"})
+    s.close()
+    assert status == 422 and body["field"] == "base_url"
+    assert fake_hermes.calls() == []
+
+
+def test_redirect_is_unreachable_and_key_not_forwarded(running, fake_hermes):
+    import http.server
+
+    hits = []
+
+    class Target(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            hits.append(self.headers.get("Authorization"))
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    tgt = http.server.HTTPServer(("127.0.0.1", 0), Target)
+
+    class Redir(Target):
+        def do_GET(self):
+            self.send_response(302)
+            self.send_header("Location", f"http://127.0.0.1:{tgt.server_address[1]}/models")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+    red = http.server.HTTPServer(("127.0.0.1", 0), Redir)
+    for srv in (tgt, red):
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        home, port = running
+        base = f"http://127.0.0.1:{red.server_address[1]}/v1"
+        status, body = post(port, "/api/tier", {"tier": "own", "base_url": base, "model": "m", "api_key": "sk-k"})
+    finally:
+        for srv in (tgt, red):
+            srv.shutdown()
+            srv.server_close()
+    assert status == 422 and body["field"] == "base_url" and hits == []
+    assert fake_hermes.calls() == []
+
+
+def test_model_starting_with_dash_refused(running, fake_hermes):
+    home, port = running
+    status, body = post(port, "/api/tier", {"tier": "private", "base_url": "http://127.0.0.1:9/v1", "model": "--evil"})
+    assert status == 422 and body["field"] == "model"
+    assert fake_hermes.calls() == []
