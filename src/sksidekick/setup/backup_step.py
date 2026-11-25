@@ -34,8 +34,10 @@ INSIDE_HOME = "that folder is inside the sidekick's own home, so a backup there 
 SAME_DISK = (
     "That folder is on the same disk as the sidekick's data inside this container, so a backup there is lost "
     "with it. Start the container with a folder of this computer mounted, for example "
-    "-v ~/sidekick-backups:/backups, then add it with: sksidekick backup add-dir /backups"
+    "-v ~/sidekick-backups:/backups, then add it with: docker exec -it <container> sksidekick backup add-dir /backups"
 )
+MOUNTINFO = Path("/proc/self/mountinfo")
+DATA_VOLUME = Path("/opt/data")  # the image's data volume (packaging/Dockerfile)
 
 
 def _inside(path: Path, root: Path) -> bool:
@@ -62,14 +64,40 @@ def _dir(home: Home, target: str) -> dict:
     return {"kind": "dir", "path": str(path)}
 
 
-def same_disk_warning(home: Home, dest: dict | None) -> str | None:
-    """In a container, a folder on the same device as the home is most likely the data volume itself."""
-    if not dest or dest["kind"] != "dir" or not state.in_container():
-        return None
+def _mount_points() -> list[str] | None:
+    """Mount points from /proc/self/mountinfo (field 5, octal escapes undone), or None where there is none."""
     try:
-        return SAME_DISK if os.stat(dest["path"]).st_dev == os.stat(home.root).st_dev else None
+        text = MOUNTINFO.read_text()
     except OSError:
         return None
+    out = []
+    for line in text.splitlines():
+        f = line.split(" ")
+        if len(f) > 4:
+            out.append(re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), f[4]))
+    return out or None
+
+
+def _mount_of(path: Path, mounts: list[str]) -> str:
+    """The longest mount point that holds ``path`` (already resolved)."""
+    p = str(path)
+    held = [m for m in mounts if m == "/" or p == m or p.startswith(m.rstrip("/") + "/")]
+    return max(held, key=len, default="/")
+
+
+def same_disk_warning(home: Home, dest: dict | None) -> str | None:
+    """In a container, a folder under the data volume, or on the same mount as the home, dies with the data.
+    A bind-mounted host folder is its own mount even on the same host disk, so it never warns. Without
+    mountinfo (not Linux) only the data volume check applies."""
+    if not dest or dest["kind"] != "dir" or not state.in_container():
+        return None
+    target = Path(dest["path"]).resolve()
+    if target == DATA_VOLUME or DATA_VOLUME in target.parents:
+        return SAME_DISK
+    mounts = _mount_points()
+    if mounts is None:
+        return None
+    return SAME_DISK if _mount_of(target, mounts) == _mount_of(home.root.resolve(), mounts) else None
 
 
 def _rclone(target: str) -> dict:

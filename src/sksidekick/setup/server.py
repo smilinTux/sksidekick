@@ -287,7 +287,11 @@ def main_setup(home: Home, host: str = "127.0.0.1", port: int = 8765) -> int:
         print(f"{home.root} is already set up", file=sys.stderr)
         return 1
     # Held (shared) while this server runs: `setup --start-over` needs the home to itself.
-    lock = start_over.hold(home, exclusive=False)
+    try:
+        lock = start_over.hold(home, exclusive=False)
+    except start_over.NoLock as e:  # setup still works; only the guard against a start-over is missing
+        print(f"{e.strerror}; setup runs without the lock that keeps setup --start-over away", file=sys.stderr)
+        return _run(home, host, port)
     if lock is None:
         print(f"{home.root} is being started over (sksidekick setup --start-over); run setup when it has finished",
               file=sys.stderr)

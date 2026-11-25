@@ -95,3 +95,40 @@ def test_nothing_to_start_over(bare_home, capsys):
     assert _cli(bare_home, "--yes") == 0
     assert not bare_home.root.exists()
     assert main(["--home", str(bare_home.root), "setup", "--yes"]) == 2
+
+
+def test_a_filesystem_without_locks_is_not_a_running_setup(bare_home, monkeypatch, capsys):
+    """Only EWOULDBLOCK/EAGAIN mean "held"; ENOTSUP and the like say so, and start-over refuses."""
+    import errno
+    import fcntl
+
+    _half_set_up(bare_home)
+    for code in (errno.ENOTSUP, errno.ENOLCK):
+        def no_locks(fd, op, code=code):
+            raise OSError(code, os.strerror(code))
+
+        monkeypatch.setattr(fcntl, "flock", no_locks)
+        assert _cli(bare_home, "--yes") == 1
+        err = capsys.readouterr().err
+        assert os.strerror(code) in err and "stop it first" not in err
+        assert (bare_home.keys_dir / keys.LIVE).exists()
+
+    def held(fd, op):
+        raise BlockingIOError(errno.EWOULDBLOCK, "busy")
+
+    monkeypatch.setattr(fcntl, "flock", held)
+    assert _cli(bare_home, "--yes") == 1
+    assert "stop it first" in capsys.readouterr().err
+
+
+def test_setup_runs_without_the_lock_where_locks_are_unsupported(bare_home, monkeypatch, capsys):
+    import errno
+    import fcntl
+
+    def no_locks(fd, op):
+        raise OSError(errno.ENOTSUP, os.strerror(errno.ENOTSUP))
+
+    monkeypatch.setattr(fcntl, "flock", no_locks)
+    s = Setup(bare_home, monkeypatch, capsys)
+    s.stop()
+    assert s.rc["rc"] == 0

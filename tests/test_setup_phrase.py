@@ -430,30 +430,51 @@ def test_backup_dir_inside_the_home_refused(at_phrase_running, tmp_path):
     assert state.load(home)["next"] == "backup"
 
 
+def _mountinfo(monkeypatch, tmp_path, *mount_points: str) -> None:
+    """A fake /proc/self/mountinfo with these mount points (all on one device, 8:1, as on one host disk)."""
+    lines = [f"{20 + i} 1 8:1 / {m.replace(' ', chr(92) + '040')} rw - ext4 /dev/sda1 rw" for i, m in enumerate(("/",) + mount_points)]
+    f = tmp_path / "mountinfo"
+    f.write_text("\n".join(lines) + "\n")
+    monkeypatch.setattr(backup_step, "MOUNTINFO", f)
+
+
 @pytest.mark.parametrize("container", [True, False])
-def test_backup_on_the_same_disk_in_a_container_warns(at_phrase_running, tmp_path, monkeypatch, container):
+def test_backup_on_the_homes_mount_in_a_container_warns(at_phrase_running, tmp_path, monkeypatch, container):
     home, port = at_phrase_running
     if container:
         monkeypatch.setenv("SKSIDEKICK_IN_CONTAINER", "1")
+    _mountinfo(monkeypatch, tmp_path)  # one mount holds both the home and the folder
     confirmed(home, port)
-    dest = tmp_path / "backups"  # beside the home, so on the same device
+    dest = tmp_path / "backups"
     dest.mkdir()
     status, body, _, _ = post(port, "/api/backup", {"kind": "dir", "target": str(dest)})
     assert status == 200
     assert body == ({"warning": backup_step.SAME_DISK} if container else {})
     assert backup.load_config(home)["destinations"] == [{"kind": "dir", "path": str(dest)}]
+    assert "docker exec -it <container> sksidekick backup add-dir /backups" in backup_step.SAME_DISK
 
 
-def test_same_disk_warning_only_for_the_same_device(bare_home, tmp_path, monkeypatch):
+def test_mount_check(bare_home, tmp_path, monkeypatch):
     monkeypatch.setenv("SKSIDEKICK_IN_CONTAINER", "1")
     bare_home.root.mkdir(parents=True)
-    real = os.stat
-
-    class St:
-        def __init__(self, dev):
-            self.st_dev = dev
-
-    monkeypatch.setattr(os, "stat", lambda p, *a, **k: St(2) if str(p) == "/mnt/elsewhere" else real(p, *a, **k))
-    assert backup_step.same_disk_warning(bare_home, {"kind": "dir", "path": "/mnt/elsewhere"}) is None
+    dest = tmp_path / "my backups"
+    dest.mkdir()
+    d = {"kind": "dir", "path": str(dest)}
+    # the documented happy path: a bind mount on the same host disk (same device) is its own mount
+    _mountinfo(monkeypatch, tmp_path, str(dest.resolve()))
+    assert backup_step.same_disk_warning(bare_home, d) is None
+    # the home on its own volume, the folder on the root mount: different mounts, no warning
+    _mountinfo(monkeypatch, tmp_path, str(bare_home.root.resolve()))
+    assert backup_step.same_disk_warning(bare_home, d) is None
+    # the folder sits on the home's mount
+    _mountinfo(monkeypatch, tmp_path, str(tmp_path.resolve()))
+    assert backup_step.same_disk_warning(bare_home, d) == backup_step.SAME_DISK
+    # no mountinfo (macOS): no warning, except under the data volume
+    monkeypatch.setattr(backup_step, "MOUNTINFO", tmp_path / "missing")
+    assert backup_step.same_disk_warning(bare_home, d) is None
+    monkeypatch.setattr(backup_step, "DATA_VOLUME", tmp_path.resolve())
+    assert backup_step.same_disk_warning(bare_home, d) == backup_step.SAME_DISK
+    monkeypatch.delenv("SKSIDEKICK_IN_CONTAINER")
+    assert backup_step.same_disk_warning(bare_home, d) is None
     assert backup_step.same_disk_warning(bare_home, {"kind": "rclone", "remote": "x:y"}) is None
     assert backup_step.same_disk_warning(bare_home, None) is None

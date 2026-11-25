@@ -9,6 +9,7 @@ long as it runs, and start-over needs the lock to itself.
 
 from __future__ import annotations
 
+import errno
 import fcntl
 import os
 import shutil
@@ -22,16 +23,23 @@ LIVE = "{root} is a sidekick already, so there is no setup to start over. To beg
 RUNNING = "setup is running for {root}; stop it first (Ctrl-C in its terminal, or stop the container), then start over."
 
 
+class NoLock(OSError):
+    """The home's filesystem cannot lock (ENOTSUP, ENOLCK, ...): not the same as another process holding it."""
+
+
 def hold(home: Home, exclusive: bool) -> int | None:
     """Lock the home directory (created, private, when missing). Returns the fd that holds the lock, or None
-    when another process holds it the other way. Closing the fd (or the process ending) lets go."""
+    when another process holds it the other way. Raises NoLock when locking itself fails. Closing the fd (or
+    the process ending) lets go."""
     home.root.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd = os.open(home.root, os.O_RDONLY)
     try:
         fcntl.flock(fd, (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB)
-    except OSError:
+    except OSError as e:
         os.close(fd)
-        return None
+        if e.errno in (errno.EWOULDBLOCK, errno.EAGAIN):
+            return None
+        raise NoLock(e.errno, f"cannot lock {home.root}: {os.strerror(e.errno) if e.errno else e}") from None
     return fd
 
 
@@ -55,7 +63,12 @@ def start_over(home: Home, yes: bool = False, ask: Callable[[str], str] = input)
     if not home.root.exists():
         print(f"Nothing to start over in {home.root}: it is empty.")
         return 0
-    fd = hold(home, exclusive=True)
+    try:
+        fd = hold(home, exclusive=True)
+    except NoLock as e:  # without the lock nothing proves no setup runs here: refuse
+        print(f"{e.strerror}; start-over needs it to be sure no setup is running. Stop setup and remove setup's "
+              "files by hand, or move the home to a disk that supports locks.", file=sys.stderr)
+        return 1
     if fd is None:
         print(RUNNING.format(root=home.root), file=sys.stderr)
         return 1
