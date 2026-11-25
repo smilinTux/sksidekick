@@ -15,6 +15,10 @@ class OutOfOrder(Exception):
     """The step asked for is not the next one."""
 
 
+class Conflict(Exception):
+    """The request cannot run now (for example the server is stopping): the router answers 409 {error}."""
+
+
 class FieldError(Exception):
     """A handler rejects one form field: the router answers 422 {field, error, **extra} and does not advance."""
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 import hmac
 import json
 import secrets
+import signal
 import sys
 import threading
 from http import HTTPStatus
@@ -179,6 +180,8 @@ class _Handler(BaseHTTPRequestHandler):
                 if action is None and state.load(home)["next"] == step:
                     state.advance(home, step)
                 finished = state.is_complete(home)
+        except state.Conflict as e:
+            return self._json(409, {"error": str(e)})
         except state.FieldError as e:
             return self._json(422, {**e.extra, "field": e.field, "error": e.message})
         except Exception:  # no detail, no traceback: a handler may hold the recovery phrase
@@ -186,6 +189,35 @@ class _Handler(BaseHTTPRequestHandler):
         if finished:
             threading.Thread(target=self.server.shutdown, daemon=True).start()
         self._json(200, result if isinstance(result, dict) else {})
+
+
+class _Stopped(BaseException):
+    """SIGTERM or SIGHUP arrived: unwind so the finally blocks (and the shred) run."""
+
+    def __init__(self, signum: int) -> None:
+        super().__init__(signum)
+        self.signum = signum
+
+
+def _raise_stopped(signum, frame) -> None:
+    for name in ("SIGTERM", "SIGHUP"):  # a second signal must not interrupt the shred
+        if hasattr(signal, name):
+            signal.signal(getattr(signal, name), signal.SIG_IGN)
+    raise _Stopped(signum)
+
+
+def _catch_stop_signals() -> dict:
+    """docker stop, systemd, kill and a closed terminal end the process without `finally`: turn them into
+    an exception. Only the main thread may set handlers (tests run main_setup in a thread). Returns the
+    previous handlers, to put back."""
+    if threading.current_thread() is not threading.main_thread():
+        return {}
+    previous = {}
+    for name in ("SIGTERM", "SIGHUP"):
+        sig = getattr(signal, name, None)
+        if sig is not None:
+            previous[sig] = signal.signal(sig, _raise_stopped)
+    return previous
 
 
 def make_server(home: Home, host: str, port: int, token: str) -> ThreadingHTTPServer:
@@ -203,15 +235,21 @@ def main_setup(home: Home, host: str = "127.0.0.1", port: int = 8765) -> int:
         return 1
     phrase.on_start(home)  # keys from a setup that died before its phrase was confirmed
     token = secrets.token_urlsafe(32)
+    previous: dict = {}
     try:
+        previous.update(_catch_stop_signals())
         srv = make_server(home, host, port, token)
         print(f"Open http://{host}:{srv.server_address[1]}/?t={token}", flush=True)
         try:
             srv.serve_forever()
-        except KeyboardInterrupt:
-            return 130
         finally:
             srv.server_close()
+    except KeyboardInterrupt:
+        return 130
+    except _Stopped as e:
+        return 128 + e.signum
     finally:
         phrase.on_stop(home)  # an unconfirmed phrase and its keys never outlive the server
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
     return 0

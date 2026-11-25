@@ -298,3 +298,59 @@ def test_done_makes_it_live(bare_home, monkeypatch, capsys, tmp_path):
     assert state.is_complete(bare_home)
     assert key_files(bare_home)  # going live keeps the confirmed key
     assert keys.unwrap_identity((bare_home.keys_dir / keys.WRAPPED).read_bytes(), out["phrase"])
+
+
+def _setup_process(home: Home):
+    import subprocess
+    import sys
+
+    at_phrase(home)
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"), "SKSIDEKICK_HOME": str(home.root)}
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import sys; from sksidekick.cli import main; sys.exit(main(sys.argv[1:]))", "setup", "--port", "0"],
+        env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    line = proc.stdout.readline()
+    m = re.search(r"Open http://127\.0\.0\.1:(\d+)/\?t=(\S+)", line)
+    assert m, line
+    return proc, int(m.group(1)), m.group(2)
+
+
+@pytest.mark.parametrize("signame, code", [("SIGTERM", 143), ("SIGHUP", 129)])
+def test_signal_stop_shreds_unconfirmed_keys(bare_home, signame, code):
+    import signal
+
+    if not hasattr(signal, signame):
+        pytest.skip(f"no {signame} here")
+    proc, port, tok = _setup_process(bare_home)
+    try:
+        status, out, _, _ = post(port, "/api/phrase/new", tok=tok)
+        assert status == 200 and key_files(bare_home)
+        proc.send_signal(getattr(signal, signame))
+        assert proc.wait(timeout=10) == code
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(5)
+    assert key_files(bare_home) == []
+    err = proc.stderr.read()
+    assert out["phrase"] not in err and not any(g in err for g in out["phrase"].split("-"))
+
+
+def test_no_new_keys_after_stop(at_phrase_running):
+    home, port = at_phrase_running
+    phrase.on_stop(home)
+    status, err, _, _ = post(port, "/api/phrase/new")
+    assert status == 409 and "error" in err
+    assert key_files(home) == []
+    phrase.on_start(home)  # a fresh start for the same home lifts it
+    assert post(port, "/api/phrase/new")[0] == 200
+
+
+def test_corrupt_progress_keeps_keys_and_says_so(at_phrase_running, capfd):
+    home, port = at_phrase_running
+    assert post(port, "/api/phrase/new")[0] == 200
+    (home.state_dir / "setup.json").write_text("{not json")
+    phrase.on_stop(home)
+    assert key_files(home)
+    assert "could not read the setup progress, so the keys were kept" in capfd.readouterr().err
+    assert str(home.root) not in phrase._PENDING

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hmac
 import secrets
+import sys
 import threading
 from dataclasses import dataclass, field
 
@@ -45,6 +46,7 @@ class _Pending:
 
 
 _PENDING: dict[str, _Pending] = {}  # str(home.root) -> the phrase waiting for its confirm
+_STOPPED: set[str] = set()  # homes whose server has stopped: no new keys after the stop shred
 
 
 def _confirmed(home: Home) -> bool:
@@ -80,6 +82,8 @@ def _norm_group(text: object) -> str:
 
 def new(home: Home, body: dict) -> dict:
     with _LOCK:
+        if str(home.root) in _STOPPED:
+            raise state.Conflict("setup is stopping; start it again")
         _shred_unconfirmed(home)  # a refresh, or keys left behind: the old phrase is gone for good
         try:
             p = keys.create_keys(home)
@@ -123,10 +127,17 @@ def refuse_plain(home: Home, body: dict) -> dict:
 def on_start(home: Home) -> None:
     """Keys left by a setup that died before the confirm (a crash, kill -9) cannot be trusted: shred them."""
     with _LOCK:
+        _STOPPED.discard(str(home.root))
         _shred_unconfirmed(home)
 
 
 def on_stop(home: Home) -> None:
-    """The server is stopping: an unconfirmed phrase and its keys go with it."""
+    """The server is stopping: an unconfirmed phrase and its keys go with it. A phrase/new still waiting
+    on the lock is refused afterwards. If setup.json cannot be read the keys are kept (they may be
+    confirmed), and one fixed line says so."""
     with _LOCK:
-        _shred_unconfirmed(home)
+        _STOPPED.add(str(home.root))
+        try:
+            _shred_unconfirmed(home)
+        except Exception:
+            sys.stderr.write("setup: could not read the setup progress, so the keys were kept\n")
