@@ -58,7 +58,7 @@ stop_service() {
 
 if [ -n "$uninstall" ]; then
     stop_service
-    for link in "$HOME/.local/bin/sksidekick"; do
+    for link in "$HOME/.local/bin/sksidekick" "$HOME/.local/bin/sksidekick-setup"; do
         if [ -L "$link" ] && case "$(readlink "$link")" in "$app"/*) true ;; *) false ;; esac; then rm -f "$link"; fi
     done
     rm -rf "$app"
@@ -114,8 +114,13 @@ say "sksidekick"
 "$uv" pip install -q --python "$app/sksidekick/bin/python" "$repo"
 ln -sf "$app/sksidekick/bin/sksidekick" "$app/bin/sksidekick"
 install -m 0755 "$here/sidekick-start.sh" "$app/bin/sidekick-start"
+render() { sed -e "s|@APP@|$app|g" -e "s|@HOME@|$home|g" "$1"; }
+# The setup page with the service's environment; also the way back in after a stopped setup.
+render "$here/sksidekick-setup.sh" > "$app/bin/sksidekick-setup"
+chmod 0755 "$app/bin/sksidekick-setup"
 mkdir -p "$HOME/.local/bin"
 ln -sf "$app/bin/sksidekick" "$HOME/.local/bin/sksidekick"
+ln -sf "$app/bin/sksidekick-setup" "$HOME/.local/bin/sksidekick-setup"
 
 if [ -n "$no_init" ]; then
     say "No sidekick created. Import yours: sksidekick --home \"$home\" import ARCHIVE --phrase-stdin"
@@ -127,7 +132,6 @@ fi
 # The service runs with SKSIDEKICK_SETUP=off: setup is started below, in this terminal, never by the
 # service too (one setup server, one port). The service's start script waits for instance.json, so it
 # only starts serving once setup (or init, or import) has made the sidekick.
-render() { sed -e "s|@APP@|$app|g" -e "s|@HOME@|$home|g" "$1"; }
 say "Service"
 if [ "$(uname -s)" = Darwin ]; then
     mkdir -p "$(dirname "$plist")"
@@ -141,37 +145,13 @@ else
     systemctl --user enable --now sksidekick.service
 fi
 
-open_url() {  # the address is always printed; a browser is opened when there is one to open
-    echo "Setup page (open it in a browser on this computer): $1"
-    [ "$mode" = headless ] && return 0
-    if [ "$(uname -s)" = Darwin ]; then
-        open "$1" >/dev/null 2>&1 || true
-    elif [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v xdg-open >/dev/null; then
-        xdg-open "$1" >/dev/null 2>&1 || true
-    fi
-}
-
 if [ -z "$no_init" ] && [ "$mode" != init ] && [ ! -f "$home/state/instance.json" ]; then
     say "Setup page: choose the model, channels and personality, and write down your recovery phrase"
-    echo "Setup runs here until you finish it in the browser. Ctrl-C stops it; start it again with:"
-    echo "    sksidekick --home \"$home\" setup --port 0"
-    set +e
-    # Setup runs with the service's own environment (packaging/sksidekick.service, io.skworld.sksidekick.plist,
-    # plus the HERMES_HOME sidekick-start exports), so `hermes config set` finds this install's Hermes and the
-    # first step seeds from this install's Hermes seed. tests/test_packaging_env.py keeps the copies equal.
-    # Port 0: any free loopback port (the address is printed and opened; 8765 may be taken here).
-    if [ "$(uname -s)" = Darwin ]; then svc_path="$app/bin:/usr/bin:/bin:/usr/sbin:/sbin"; else svc_path="$app/bin:/usr/local/bin:/usr/bin:/bin"; fi
-    env PATH="$svc_path" SKSIDEKICK_HOME="$home" SIDEKICK_SEED="$app/hermes-seed" SIDEKICK_BIN="$app/sksidekick/bin" \
-        SIDEKICK_SKMEMORY_JSON="$app/skmemory.json" HERMES_HOME="$home/hermes" \
-        "$app/bin/sksidekick" --home "$home" setup --port 0 | while IFS= read -r line; do
-        case "$line" in
-            "Open http"*) open_url "${line#Open }" ;;
-            *) printf '%s\n' "$line" ;;
-        esac
-    done
-    rc="${PIPESTATUS[0]}"
-    set -e
-    [ "$rc" = 0 ] || die "setup did not finish (exit $rc); start it again: sksidekick --home \"$home\" setup --port 0"
+    flag=""
+    [ "$mode" = headless ] && flag="--headless"
+    rc=0
+    "$app/bin/sksidekick-setup" $flag || rc=$?
+    [ "$rc" = 0 ] || die "setup stopped (exit $rc). Run sksidekick-setup (in $HOME/.local/bin) to go on where it stopped, or run install.sh again."
 fi
 
 echo "Done. Your sidekick's home: $home"

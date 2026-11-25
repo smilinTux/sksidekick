@@ -12,7 +12,8 @@ channels to use (none is fine), the personality and voice, your recovery phrase,
 
 - **Plain install** (macOS, Linux): `bash packaging/install.sh` installs, then opens the setup page.
   `--setup-headless` prints its address instead of opening a browser; `--init` skips the page and shows
-  the phrase in the terminal (`sksidekick init`).
+  the phrase in the terminal (`sksidekick init`). If setup stops (Ctrl-C, a closed terminal), run
+  `sksidekick-setup` to go on where it stopped (`--headless` to only print the address).
 - **Container**: publish the setup port on your own computer only, then open the address from the log:
 
   ```sh

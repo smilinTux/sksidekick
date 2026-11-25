@@ -39,13 +39,18 @@ if [ ! -f "$home/state/instance.json" ] && [ "${SKSIDEKICK_SETUP:-on}" != off ];
     trap - TERM HUP INT
     [ -z "$stopping" ] || exit 143
     if [ "$setup_code" != 0 ]; then
+        echo "Setup stopped (exit $setup_code)."
         said=""
     fi
 fi
 
 while [ ! -f "$home/state/instance.json" ]; do
     if [ -z "$said" ]; then
-        echo "No sidekick here yet. Run: docker exec -it <container> sksidekick init   (or sksidekick import ARCHIVE --phrase-stdin)"
+        if [ -n "${SIDEKICK_SETUP_CMD:-}" ]; then  # a plain install's service: setup runs in a terminal
+            echo "No sidekick here yet. Run $SIDEKICK_SETUP_CMD in a terminal to set it up (or sksidekick --home \"$home\" import ARCHIVE --phrase-stdin when moving here)."
+        else
+            echo "No sidekick here yet. Run: docker exec -it <container> sksidekick init   (or sksidekick import ARCHIVE --phrase-stdin)"
+        fi
         said=1
     fi
     sleep 5

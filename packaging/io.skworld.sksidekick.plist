@@ -9,6 +9,7 @@
   <dict>
     <key>SKSIDEKICK_HOME</key><string>@HOME@</string>
     <key>SKSIDEKICK_SETUP</key><string>off</string>
+    <key>SIDEKICK_SETUP_CMD</key><string>@APP@/bin/sksidekick-setup</string>
     <key>SIDEKICK_SEED</key><string>@APP@/hermes-seed</string>
     <key>SIDEKICK_BIN</key><string>@APP@/sksidekick/bin</string>
     <key>SIDEKICK_SKMEMORY_JSON</key><string>@APP@/skmemory.json</string>

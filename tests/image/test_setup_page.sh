@@ -88,12 +88,11 @@ wait_for 30 "memory.provider skmemory" sh -c "docker exec -u hermes '$C' sidekic
 ok "setup layered on the Hermes seed (seed setting kept, model chosen, skmemory provider)"
 
 patterns="$(printf '%s\n%s\n' "$phrase" "$(printf '%s' "$phrase" | tr -d -)")"
-if printf '%s\n' "$patterns" | docker exec -i "$C" grep -rlF -f - /opt/data >/dev/null 2>&1; then
-    fail "the recovery phrase was written to a file under /opt/data"
-fi
-if docker logs "$C" 2>&1 | grep -qF -f <(printf '%s\n' "$patterns"); then
-    fail "the recovery phrase is in the container log"
-fi
+# grep: 0 is a match (a leak), 1 is clean, anything else means the search itself failed.
+rc=0; printf '%s\n' "$patterns" | docker exec -i "$C" grep -rqsF -f - /opt/data || rc=$?
+case "$rc" in 0) fail "the recovery phrase was written to a file under /opt/data";; 1) ;; *) fail "could not search /opt/data for the phrase (grep exit $rc)";; esac
+rc=0; docker logs "$C" 2>&1 | grep -qF -f <(printf '%s\n' "$patterns") || rc=$?
+case "$rc" in 0) fail "the recovery phrase is in the container log";; 1) ;; *) fail "could not search the container log (grep exit $rc)";; esac
 ok "the phrase is in no file under /opt/data and in no log line"
 
 # One real turn against the model setup chose (the same check as test_memory_turn.sh).
