@@ -11,7 +11,7 @@ A `.sksk` file is a plain (uncompressed) POSIX tar with exactly three members, i
 | Member | Contents | Encrypted |
 |---|---|---|
 | `manifest.json` | `format` (`sksidekick.archive.v1`), `created` (UTC, ISO 8601), `purpose` (`export`, `backup` or `move`), `recipient` (the age public key), `payload_sha256` (sha256 of `payload.age`), `wrapped_sha256` (sha256 of `recovery.identity.age`), `mac` (see below) | no; it names no files |
-| `recovery.identity.age` | the sidekick's age X25519 secret key, encrypted with the recovery phrase (age scrypt passphrase mode) | yes, by the phrase |
+| `recovery.identity.age` | the sidekick's age X25519 secret key, encrypted (plain age X25519) to the key the recovery phrase derives, see "The recovery key" below | yes, by the phrase |
 | `payload.age` | a tar.gz of the story, encrypted to `recipient` (age X25519 mode) | yes, by the key |
 
 Inside the decrypted payload:
@@ -57,19 +57,59 @@ is the only way back.
 - `sksidekick export --plain DIR` writes a decrypted, readable copy for leaving the ecosystem. Anyone who
   gets that folder can read it.
 
+## The recovery key
+
+The phrase stands for an age identity: scrypt over the phrase in its printed form (upper case, hyphens), salt
+`sksidekick recovery key v2`, N = 2^15, r = 8, p = 1, 32 bytes, written as an age secret key (bech32,
+`AGE-SECRET-KEY-1...`). `recovery.identity.age` is the sidekick's own key encrypted to that identity.
+
+The cost is fixed on purpose. age's passphrase mode picks its cost by timing the computer that encrypts and
+refuses, on the computer that decrypts, any file costing more than 16 times its own one-second estimate; at the
+cost a fast desktop picks it also needs 1 GiB of memory. So a correct phrase could fail on a small box or a busy
+one. The phrase is 200 random bits, so it needs neither a salt nor a high cost to resist guessing.
+
+Archives made before 2026-11-25 hold the key in age passphrase mode instead (`-> scrypt` in its header).
+`sksidekick` still opens them; if age refuses one as too costly for this computer it says so, rather than
+calling the phrase wrong.
+
 ## Opening an archive with stock tools
 
-You need `tar` and [age](https://age-encryption.org) (v1.1 or later). Type the phrase exactly as it was
-printed: upper case, with the hyphens (`sksidekick` itself also accepts lower case and spaces).
+You need `tar`, [age](https://age-encryption.org) (v1.1 or later) and Python 3.8 or later (standard library
+only). Type the phrase exactly as it was printed: upper case, with the hyphens (`sksidekick` itself also accepts
+lower case and spaces).
 
 ```sh
 tar xf my-sidekick.sksk                           # manifest.json, recovery.identity.age, payload.age
-age -d -o key.txt recovery.identity.age           # asks for the recovery phrase
+python3 phrase-key.py > phrase.key                # asks for the recovery phrase (script below)
+age -d -i phrase.key -o key.txt recovery.identity.age
 age -d -i key.txt payload.age | tar xzf -         # writes story/ and inner-manifest.json
-rm key.txt                                        # the key opens every archive of this sidekick
+rm phrase.key key.txt                             # either one opens every archive of this sidekick
 ```
 
-Checked with age v1.2.1 and GNU tar on 2026-11-20.
+`phrase-key.py`:
+
+```python
+import getpass, hashlib
+p = getpass.getpass("recovery phrase: ").strip().upper()
+seed = hashlib.scrypt(p.encode(), salt=b"sksidekick recovery key v2", n=2**15, r=8, p=1, maxmem=2**26, dklen=32)
+cs, hrp = "qpzry9x8gf2tvdw0s3jn54khce6mua7l", "age-secret-key-"
+acc = bits = 0; data = []
+for b in seed:
+    acc, bits = acc << 8 | b, bits + 8
+    while bits >= 5: bits -= 5; data.append(acc >> bits & 31)
+data.append(acc << (5 - bits) & 31)
+def polymod(vs):
+    c = 1
+    for v in vs:
+        t = c >> 25; c = (c & 0x1FFFFFF) << 5 ^ v
+        for i, g in enumerate((0x3B6A57B2, 0x26508E6D, 0x1EA119FA, 0x3D4233DD, 0x2A1462B3)): c ^= g if t >> i & 1 else 0
+    return c
+pm = polymod([ord(c) >> 5 for c in hrp] + [0] + [ord(c) & 31 for c in hrp] + data + [0] * 6) ^ 1
+print((hrp + "1" + "".join(cs[d] for d in data + [pm >> 5 * (5 - i) & 31 for i in range(6)])).upper())
+```
+
+For an archive made before 2026-11-25, skip the script: `age -d -o key.txt recovery.identity.age` asks for
+the phrase itself.
 
 ## Rules a reader must follow
 
