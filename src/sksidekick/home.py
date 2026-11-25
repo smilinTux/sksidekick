@@ -17,7 +17,12 @@ SKMEMORY_AGENT = "sidekick"
 # inside HERMES_HOME and so inside the sidekick home: it is story and goes in every archive.
 AGENT_STORE = f"{HERMES}/.skmemory/agents/{SKMEMORY_AGENT}"
 # Rebuildable or machine-local parts of the Hermes home: never story, never in an archive.
-EXCLUDE_DIRS = ("hermes/logs", "hermes/cache", "hermes/tools", "hermes/plugins", f"{AGENT_STORE}/logs")
+EXCLUDE_DIRS = (
+    "hermes/logs", "hermes/cache", "hermes/tools", "hermes/plugins",
+    # dependency venvs a plain-install Hermes builds per home, process runtime, media caches, update checks
+    "hermes/installs", "hermes/runtime", "hermes/audio_cache", "hermes/image_cache", "hermes/plugin-update-checks",
+    f"{AGENT_STORE}/logs",
+)
 EXCLUDE_GLOBS = ("*.lock", "*.pid")
 
 

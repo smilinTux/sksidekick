@@ -78,6 +78,19 @@ def test_hermes_logs_tools_cache_plugins_excluded(bare_home: Home):
     assert bare_home.symlinks() == []
 
 
+def test_hermes_runtime_dirs_excluded(bare_home: Home):
+    # A plain-install Hermes builds its dependency venvs under HERMES_HOME/installs (full of symlinks);
+    # found by the move test on 2026-11-25. These are rebuilt at the new place, never moved.
+    _touch(
+        bare_home,
+        "hermes/installs/k/environments/e/venv/pyvenv.cfg", "hermes/runtime/r.json", "hermes/audio_cache/a.ogg",
+        "hermes/image_cache/i.png", "hermes/plugin-update-checks/c.json", "memory/a.json",
+    )
+    (bare_home.root / "hermes/installs/k/environments/e/venv/python").symlink_to("pyvenv.cfg")
+    assert [str(p) for p in bare_home.story_paths()] == ["memory/a.json"]
+    assert bare_home.symlinks() == []
+
+
 def test_plugin_memory_store_is_story(bare_home: Home):
     _touch(bare_home, "hermes/.skmemory/agents/sidekick/memory/long-term/m1.json",
            "hermes/.skmemory/agents/sidekick/memory/index.db", "hermes/.skmemory/agents/sidekick/config/skmemory.yaml")
