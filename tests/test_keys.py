@@ -165,3 +165,25 @@ def test_documented_stock_tools_script_matches(monkeypatch, capsys):
     monkeypatch.setattr(getpass, "getpass", lambda prompt="": PHRASE.lower() + "\n")
     exec(compile(script, "phrase-key.py", "exec"), {})
     assert capsys.readouterr().out.strip() == str(keys.phrase_identity(PHRASE))
+
+
+@pytest.mark.parametrize("typed", [PHRASE.replace("-", " "), PHRASE.replace("-", ""), PHRASE.replace("0", "O"),
+                                   PHRASE.replace("1", "I"), PHRASE.replace("1", "l").lower()])
+def test_documented_script_accepts_what_sksidekick_accepts(monkeypatch, capsys, typed):
+    from pathlib import Path
+    import getpass
+
+    doc = (Path(__file__).parents[1] / "docs/ARCHIVE_FORMAT.md").read_text()
+    script = doc.split("`phrase-key.py`:\n\n```python\n", 1)[1].split("```", 1)[0]
+    monkeypatch.setattr(getpass, "getpass", lambda prompt="": typed)
+    exec(compile(script, "phrase-key.py", "exec"), {})
+    assert capsys.readouterr().out.strip() == str(keys.phrase_identity(typed)) == str(keys.phrase_identity(PHRASE))
+
+
+def test_unwrapped_secret_that_is_not_a_key_is_damage():
+    junk = pyrage.encrypt(b"\xff\xfe not an identity", [keys.phrase_identity(PHRASE).to_public()])
+    with pytest.raises(keys.KeyDamaged):
+        keys.unwrap_identity(junk, PHRASE)
+    junk2 = pyrage.encrypt(b"AGE-SECRET-KEY-1NOPE", [keys.phrase_identity(PHRASE).to_public()])
+    with pytest.raises(keys.KeyDamaged):
+        keys.unwrap_identity(junk2, PHRASE)
