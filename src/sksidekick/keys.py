@@ -10,7 +10,7 @@ with scrypt at one FIXED cost (``KDF``). Not age's passphrase mode: that times
 the machine on every decrypt and refuses a file whose cost is over 16x its
 estimate of one second there (and needs 1 GiB of memory at the cost a fast
 computer picks), so a correct phrase could fail on a small or busy computer.
-The phrase is 200 random bits, so the derivation needs no salt and no high cost.
+The phrase is 200 random bits, so a fixed salt and a low cost are enough.
 """
 
 from __future__ import annotations
@@ -183,14 +183,26 @@ def wrap_identity(identity: x25519.Identity, phrase: str) -> bytes:
     return pyrage.encrypt(str(identity).encode(), [phrase_identity(phrase).to_public()])
 
 
+def is_legacy(wrapped: bytes) -> bool:
+    """True for a key wrapped in age passphrase mode (before 2026-11-25)."""
+    return b"\n-> scrypt " in wrapped.split(b"\n---", 1)[0]
+
+
+def _identity_from(secret: bytes) -> x25519.Identity:
+    try:
+        return x25519.Identity.from_str(secret.decode().strip())
+    except (UnicodeDecodeError, pyrage.IdentityError, ValueError) as exc:
+        raise KeyDamaged("the recovery key opened but does not hold a sidekick key") from exc
+
+
 def unwrap_identity(wrapped: bytes, phrase: str) -> x25519.Identity:
-    if b"\n-> scrypt " in wrapped.split(b"\n---", 1)[0]:
+    if is_legacy(wrapped):
         return _unwrap_legacy(wrapped, phrase)
     try:
         secret = pyrage.decrypt(wrapped, [phrase_identity(phrase)])
     except (pyrage.DecryptError, ValueError) as exc:
         raise WrongPhrase("recovery phrase does not open this archive") from exc
-    return x25519.Identity.from_str(secret.decode().strip())
+    return _identity_from(secret)
 
 
 def _unwrap_legacy(wrapped: bytes, phrase: str) -> x25519.Identity:
@@ -206,7 +218,7 @@ def _unwrap_legacy(wrapped: bytes, phrase: str) -> x25519.Identity:
                 "phrase was not checked. Open the archive on a bigger computer, then export it again."
             ) from exc
         raise WrongPhrase("recovery phrase does not open this archive") from exc
-    return x25519.Identity.from_str(secret.decode().strip())
+    return _identity_from(secret)
 
 
 def shred_keys(home: Home) -> list[str]:

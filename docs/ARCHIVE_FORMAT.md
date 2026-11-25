@@ -75,8 +75,8 @@ calling the phrase wrong.
 ## Opening an archive with stock tools
 
 You need `tar`, [age](https://age-encryption.org) (v1.1 or later) and Python 3.8 or later (standard library
-only). Type the phrase exactly as it was printed: upper case, with the hyphens (`sksidekick` itself also accepts
-lower case and spaces).
+only). Type the phrase as it was printed; like `sksidekick` itself, the script also accepts
+lower case, spaces or no separators, and O, I or L for 0 and 1.
 
 ```sh
 tar xf my-sidekick.sksk                           # manifest.json, recovery.identity.age, payload.age
@@ -90,7 +90,9 @@ rm phrase.key key.txt                             # either one opens every archi
 
 ```python
 import getpass, hashlib
-p = getpass.getpass("recovery phrase: ").strip().upper()
+c = "".join(ch for ch in getpass.getpass("recovery phrase: ").upper() if ch not in " -\t\n")
+c = c.translate(str.maketrans("OIL", "011"))  # the lookalikes sksidekick also accepts
+p = "-".join(c[i:i + 5] for i in range(0, len(c), 5))
 seed = hashlib.scrypt(p.encode(), salt=b"sksidekick recovery key v2", n=2**15, r=8, p=1, maxmem=2**26, dklen=32)
 cs, hrp = "qpzry9x8gf2tvdw0s3jn54khce6mua7l", "age-secret-key-"
 acc = bits = 0; data = []

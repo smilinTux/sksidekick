@@ -265,8 +265,15 @@ def verify(path: Path, identity: x25519.Identity) -> dict:
     return inner
 
 
+def _wrapped_key(outer: dict[str, bytes]) -> bytes:
+    """The recovery key, after the manifest's checksum (so damage reads as damage, not as a wrong phrase)."""
+    if _sha256(outer["recovery.identity.age"]) != _manifest(outer).get("wrapped_sha256"):
+        raise ArchiveDamaged("archive damaged: the recovery key inside it does not match, so the phrase could not open it")
+    return outer["recovery.identity.age"]
+
+
 def open_identity(path: Path, phrase: str) -> x25519.Identity:
-    return keys.unwrap_identity(_read_outer(Path(path))["recovery.identity.age"], phrase)
+    return keys.unwrap_identity(_wrapped_key(_read_outer(Path(path))), phrase)
 
 
 def _write_private_file(dest: Path, data: bytes) -> None:
@@ -305,8 +312,11 @@ def import_archive(
     if identity is None:
         if phrase is None:
             raise ValueError("import needs the recovery phrase or the identity")
-        identity = keys.unwrap_identity(outer["recovery.identity.age"], phrase)
+        identity = keys.unwrap_identity(_wrapped_key(outer), phrase)
     inner, files = _open_payload(outer, identity)
+    wrapped = outer["recovery.identity.age"]
+    if phrase is not None and keys.is_legacy(wrapped):
+        wrapped = keys.wrap_identity(identity, phrase)  # convert: an old passphrase-mode key fails on small computers
     root = target.root.resolve() if target.root.is_symlink() else target.root
     root.mkdir(parents=True, exist_ok=True)
     os.chmod(root, 0o700)
@@ -318,7 +328,7 @@ def import_archive(
         built = Home(staging)
         for rel, data in files.items():
             _write_private_file(staging / rel, data)
-        keys.install_identity(built, identity, outer["recovery.identity.age"])
+        keys.install_identity(built, identity, wrapped)
         built.new_instance()
         order = sorted(staging.iterdir(), key=lambda p: (p.name in ("keys", "state"), p.name == "state", p.name))
         for child in order:

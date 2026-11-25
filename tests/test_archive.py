@@ -510,3 +510,49 @@ def test_archive_refuses_excluded_paths(keyed, tmp_path: Path):
     a = _evil_archive(home, tmp_path / "evil.sksk", add)
     with pytest.raises(archive.ArchiveDamaged, match="not story content"):
         archive.verify(a, keys.load_identity(home))
+
+
+# recovery key review (2026-11-25) -------------------------------------------
+
+
+def _legacy_home(home: Home) -> str:
+    """Re-wrap a fresh home's key the pre-2026-11-25 way (age passphrase mode)."""
+    from pyrage import passphrase
+
+    phrase = keys.create_keys(home)
+    home.new_instance()
+    ident = keys.load_identity(home)
+    legacy = passphrase.encrypt(str(ident).encode(), phrase)
+    for name in (keys.WRAPPED, keys.WRAPPED_MAC):
+        (home.keys_dir / name).unlink()
+    (home.keys_dir / keys.WRAPPED).write_bytes(legacy)
+    (home.keys_dir / keys.WRAPPED_MAC).write_text(keys.wrapped_mac(ident, legacy))
+    return phrase
+
+
+def test_import_converts_a_legacy_recovery_key(story_home: Home, tmp_path: Path):
+    phrase = _legacy_home(story_home)
+    a = archive.export(story_home, tmp_path / "old.sksk")
+    assert keys.is_legacy(_read_members(a)["recovery.identity.age"])
+    target = Home(tmp_path / "r")
+    archive.import_archive(a, target, phrase=phrase)
+    wrapped = (target.keys_dir / keys.WRAPPED).read_bytes()
+    assert not keys.is_legacy(wrapped)
+    assert keys.checked_wrapped(target) == wrapped  # its recovery.mac was rewritten too
+    b = archive.export(target, tmp_path / "new.sksk")
+    assert str(archive.open_identity(b, phrase)) == str(keys.load_identity(story_home))
+
+
+def test_damaged_recovery_key_reads_as_damaged_not_wrong_phrase(keyed, tmp_path: Path):
+    home, phrase = keyed
+    a = archive.export(home, tmp_path / "out.sksk")
+    _flip_member(a, "recovery.identity.age")
+    with pytest.raises(archive.ArchiveDamaged):
+        archive.import_archive(a, Home(tmp_path / "r"), phrase=phrase)
+    with pytest.raises(archive.ArchiveDamaged):
+        archive.open_identity(a, phrase)
+
+
+def _read_members(a: Path) -> dict[str, bytes]:
+    with tarfile.open(a) as t:
+        return {n: t.extractfile(n).read() for n in t.getnames()}
