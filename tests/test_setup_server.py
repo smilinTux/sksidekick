@@ -97,8 +97,9 @@ def test_unknown_routes_are_404_json(running):
 
 def test_registered_action_route(running):
     home, port = running
-    for s in ("tier", "channels", "personality"):
-        assert call(port, "POST", f"/api/{s}", cookie=TOKEN, header=TOKEN)[0] == 200
+    state.advance(home, "tier")
+    state.advance(home, "channels")
+    state.advance(home, "personality")
     server.ROUTES[("phrase", "new")] = lambda home, body: {"ok": True}
     try:
         status, _, data = call(port, "POST", "/api/phrase/new", cookie=TOKEN, header=TOKEN)
@@ -150,7 +151,9 @@ def test_done_shuts_the_server_down(bare_home, capsys):
             break
         time.sleep(0.05)
     port, tok = int(m.group(1)), m.group(2)
-    for s in state.Steps:
+    for s in state.Steps[:3]:  # the form steps validate real input and have their own tests
+        state.advance(bare_home, s)
+    for s in state.Steps[3:]:
         assert call(port, "POST", f"/api/{s}", cookie=tok, header=tok)[0] == 200
     t.join(5)
     assert done["rc"] == 0

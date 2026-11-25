@@ -58,7 +58,7 @@ def test_soul_written_and_is_story(bare_home, fake_hermes):
     assert "calm and patient" in text
     assert all(line in text for line in SAMPLES["mentor"])
     assert "## Voice" in text and "never changes what the sidekick is allowed to do" in text
-    assert not re.search("[–—]", text)
+    assert not re.search("[\\u2013\\u2014]", text)
 
 
 def test_voice_sets_piper(bare_home, fake_hermes):
