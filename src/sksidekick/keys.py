@@ -4,6 +4,13 @@ The running sidekick keeps its identity in ``keys/live.identity`` (it must hold
 the key while it runs). ``keys/recovery.identity.age`` is the same identity
 wrapped with the recovery phrase, which travels inside every archive. The
 phrase itself is never stored.
+
+The wrap is a plain age X25519 file, encrypted to a key derived from the phrase
+with scrypt at one FIXED cost (``KDF``). Not age's passphrase mode: that times
+the machine on every decrypt and refuses a file whose cost is over 16x its
+estimate of one second there (and needs 1 GiB of memory at the cost a fast
+computer picks), so a correct phrase could fail on a small or busy computer.
+The phrase is 200 random bits, so the derivation needs no salt and no high cost.
 """
 
 from __future__ import annotations
@@ -31,6 +38,10 @@ WRAPPED_MAC = "recovery.mac"
 
 class WrongPhrase(ValueError):
     """The recovery phrase does not open this key."""
+
+
+class KeyTooCostly(ValueError):
+    """An older (age passphrase) recovery key that age will not open on this computer, phrase unchecked."""
 
 
 class KeyDamaged(ValueError):
@@ -114,7 +125,7 @@ def create_keys(home: Home) -> str:
         raise FileExistsError(f"{home.keys_dir} already holds keys")
     phrase = generate_phrase()
     identity = x25519.Identity.generate()
-    wrapped = passphrase.encrypt(str(identity).encode(), phrase)
+    wrapped = wrap_identity(identity, phrase)
     install_identity(home, identity, wrapped)
     return phrase
 
@@ -127,10 +138,73 @@ def recipient(home: Home) -> x25519.Recipient:
     return x25519.Recipient.from_str((home.keys_dir / RECIPIENT).read_text().strip())
 
 
+# Part of the archive format (docs/ARCHIVE_FORMAT.md): changing any of these strands every archive made before.
+KDF = {"n": 2**15, "r": 8, "p": 1}  # 32 MiB and well under a second, the same on every computer
+KDF_SALT = b"sksidekick recovery key v2"
+_BECH32 = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
+
+
+def _bech32_polymod(values) -> int:
+    gen = (0x3B6A57B2, 0x26508E6D, 0x1EA119FA, 0x3D4233DD, 0x2A1462B3)
+    chk = 1
+    for v in values:
+        top = chk >> 25
+        chk = (chk & 0x1FFFFFF) << 5 ^ v
+        for i in range(5):
+            chk ^= gen[i] if (top >> i) & 1 else 0
+    return chk
+
+
+def bech32_secret_key(seed: bytes) -> str:
+    """``seed`` (32 bytes) as an age secret key string (BIP 173 bech32, HRP ``age-secret-key-``)."""
+    if len(seed) != 32:
+        raise ValueError("an age secret key is 32 bytes")
+    hrp, acc, bits, data = "age-secret-key-", 0, 0, []
+    for b in seed:
+        acc, bits = acc << 8 | b, bits + 8
+        while bits >= 5:
+            bits -= 5
+            data.append(acc >> bits & 31)
+    if bits:
+        data.append(acc << (5 - bits) & 31)
+    values = [ord(c) >> 5 for c in hrp] + [0] + [ord(c) & 31 for c in hrp] + data
+    poly = _bech32_polymod(values + [0] * 6) ^ 1
+    checksum = [poly >> 5 * (5 - i) & 31 for i in range(6)]
+    return (hrp + "1" + "".join(_BECH32[d] for d in data + checksum)).upper()
+
+
+def phrase_identity(phrase: str) -> x25519.Identity:
+    """The age identity the recovery phrase stands for (normalized first; raises ValueError on a bad shape)."""
+    seed = hashlib.scrypt(normalize_phrase(phrase).encode(), salt=KDF_SALT, maxmem=64 * 1024 * 1024, dklen=32, **KDF)
+    return x25519.Identity.from_str(bech32_secret_key(seed))
+
+
+def wrap_identity(identity: x25519.Identity, phrase: str) -> bytes:
+    return pyrage.encrypt(str(identity).encode(), [phrase_identity(phrase).to_public()])
+
+
 def unwrap_identity(wrapped: bytes, phrase: str) -> x25519.Identity:
+    if b"\n-> scrypt " in wrapped.split(b"\n---", 1)[0]:
+        return _unwrap_legacy(wrapped, phrase)
+    try:
+        secret = pyrage.decrypt(wrapped, [phrase_identity(phrase)])
+    except (pyrage.DecryptError, ValueError) as exc:
+        raise WrongPhrase("recovery phrase does not open this archive") from exc
+    return x25519.Identity.from_str(secret.decode().strip())
+
+
+def _unwrap_legacy(wrapped: bytes, phrase: str) -> x25519.Identity:
+    """A key wrapped before 2026-11-25, in age passphrase mode."""
     try:
         secret = passphrase.decrypt(wrapped, normalize_phrase(phrase))
-    except (pyrage.DecryptError, ValueError) as exc:
+    except ValueError as exc:
+        raise WrongPhrase("recovery phrase does not open this archive") from exc
+    except pyrage.DecryptError as exc:
+        if "excessive work" in str(exc).lower():
+            raise KeyTooCostly(
+                "this older recovery key needs more memory or time than age allows on this computer, so the "
+                "phrase was not checked. Open the archive on a bigger computer, then export it again."
+            ) from exc
         raise WrongPhrase("recovery phrase does not open this archive") from exc
     return x25519.Identity.from_str(secret.decode().strip())
 
