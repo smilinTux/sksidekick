@@ -33,6 +33,14 @@ ROUTES: dict[tuple[str, str | None], object] = {("tier", None): tier.handle, ("c
     ("personality", None): soul.handle, ("phrase", None): phrase.refuse_plain, ("phrase", "new"): phrase.new,
     ("phrase", "confirm"): phrase.confirm, ("backup", None): backup_step.handle}
 
+# What a completed step shows when the page draws it read-only: ids only, read from a body its handler has
+# just accepted (so the ids are known ones). Never a URL, key, token or password.
+CHOICES = {
+    "tier": lambda b: {"tier": b.get("tier")},
+    "channels": lambda b: {"channels": [c.get("id") for c in b.get("channels", []) if isinstance(c, dict)]},
+    "personality": lambda b: {"type": b.get("type"), "voice": b.get("voice")},
+}
+
 _LOCK = threading.Lock()
 
 
@@ -181,7 +189,8 @@ class _Handler(BaseHTTPRequestHandler):
                     return self._json(409, {"error": msg})
                 result = handler(home, body) if handler else {}
                 if action is None and state.load(home)["next"] == step:
-                    state.advance(home, step)
+                    choice = CHOICES[step](body) if step in CHOICES else None
+                    state.advance(home, step, choice)
                 finished = state.is_complete(home)
         except state.Conflict as e:
             return self._json(409, {"error": str(e)})

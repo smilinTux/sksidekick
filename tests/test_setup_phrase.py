@@ -311,9 +311,11 @@ def _start_setup(home: Home):
         env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
 
-def _url(proc, seconds=10.0) -> tuple[int, str]:
-    """The first stdout line, read with a deadline (a reader thread), as (port, token)."""
+def _url(proc, seconds=60.0) -> tuple[int, str]:
+    """The first stdout line, read with a deadline (a reader thread), as (port, token). A cold macOS runner
+    can take many seconds to start a fresh Python with pyrage, hence the long deadline; a miss says why."""
     import queue
+    import subprocess
 
     q: queue.Queue = queue.Queue()
     threading.Thread(target=lambda: q.put(proc.stdout.readline()), daemon=True).start()
@@ -322,7 +324,18 @@ def _url(proc, seconds=10.0) -> tuple[int, str]:
     except queue.Empty:
         line = ""
     m = re.search(r"Open http://127\.0\.0\.1:(\d+)/\?t=(\S+)", line)
-    assert m, "setup did not print its address in time"
+    if not m:
+        code = proc.poll()  # None: still running when the deadline passed
+        if code is None:
+            proc.kill()
+        try:
+            err = proc.communicate(timeout=10)[1] or ""
+        except (subprocess.TimeoutExpired, ValueError, OSError):
+            err = "<stderr unreadable>"
+        raise AssertionError(
+            f"setup did not print its address within {seconds:.0f}s "
+            f"({'still running, killed' if code is None else f'exited {code}'}); first stdout line {line!r}; "
+            f"stderr: {err[-2000:]!r}")
     return int(m.group(1)), m.group(2)
 
 

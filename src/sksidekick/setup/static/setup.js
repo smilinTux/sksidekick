@@ -145,7 +145,9 @@
     show(STEPS[j]);
   }
 
-  async function refresh() {
+  // resume: true only for the first load of the page. A refresh after a 409 or a finished step never
+  // starts a new phrase on its own (a lasting 409 on phrase/new would otherwise loop).
+  async function refresh(resume) {
     let r;
     try { r = await get("api/state"); } catch (e) { show("gone"); return false; }
     if (r.status === 403) { token = ""; store(TOKEN_KEY, ""); show("lost"); return false; }
@@ -154,7 +156,10 @@
     render();
     show(st.next && st.next !== "done" ? st.next : "done");
     // a reload while the groups were on screen: the old phrase is gone (the server shreds its key), show a new one
-    if (current === "phrase" && !done("phrase") && stored(OPEN_KEY)) newPhrase();
+    if (resume === true && current === "phrase" && !done("phrase") && stored(OPEN_KEY)) {
+      store(OPEN_KEY, ""); // cleared first: newPhrase sets it again only once a phrase is on screen
+      newPhrase();
+    }
     return true;
   }
 
@@ -187,7 +192,7 @@
 
   function tierFields() {
     const t = chosen("tier");
-    const needs = t && t !== "shared" ? st.tiers[t].needs : [];
+    const needs = t && t !== "shared" && !done("tier") ? st.tiers[t].needs : [];
     ["base_url", "model", "api_key"].forEach(function (f) { byId("row-" + f).hidden = needs.indexOf(f) < 0; });
   }
 
@@ -437,10 +442,22 @@
   });
 
   // ---- wiring ----
+  // A finished step shows the choice made there (ids only; secrets are never sent back).
+  function checkIf(id) { const e = byId(id); if (e) e.checked = true; }
+
+  function showChoices() {
+    const c = st.choices || {};
+    if (c.tier) checkIf("tier-" + c.tier.tier);
+    if (c.channels) c.channels.channels.forEach(function (id) { checkIf("ch-" + id); });
+    if (c.personality) { checkIf("p-" + c.personality.type); checkIf("voice-" + c.personality.voice); }
+    tierFields();
+  }
+
   function render() {
     renderTiers();
     renderChannels();
     renderPersonalities();
+    showChoices();
     $("backup-later-note").textContent = st.backup_warning || "";
     backupRows();
   }
@@ -449,5 +466,5 @@
   document.querySelectorAll(".next").forEach(function (b) { b.addEventListener("click", function () { go(1); }); });
 
   if (!token) { show("lost"); return; }
-  refresh();
+  refresh(true);
 })();

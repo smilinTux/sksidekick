@@ -33,16 +33,23 @@ def _path(home: Home) -> Path:
     return home.state_dir / "setup.json"
 
 
-def _completed(home: Home) -> list[str]:
+def _read(home: Home) -> dict:
     try:
-        return list(json.loads(_path(home).read_text()).get("completed", []))
+        return dict(json.loads(_path(home).read_text()))
     except FileNotFoundError:
-        return []
+        return {}
+
+
+def _completed(home: Home) -> list[str]:
+    return list(_read(home).get("completed", []))
 
 
 def load(home: Home) -> dict:
-    done = _completed(home)
-    return {"completed": done, "next": Steps[len(done)] if len(done) < len(Steps) else None}
+    """Progress, and the choice made at each completed step (ids only, never a secret) for the page to show."""
+    data = _read(home)
+    done = list(data.get("completed", []))
+    choices = {k: v for k, v in dict(data.get("choices", {})).items() if k in done}
+    return {"completed": done, "next": Steps[len(done)] if len(done) < len(Steps) else None, "choices": choices}
 
 
 def is_complete(home: Home) -> bool:
@@ -55,14 +62,18 @@ def check(home: Home, step: str) -> None:
         raise OutOfOrder(step)
 
 
-def advance(home: Home, step: str) -> None:
+def advance(home: Home, step: str, choice: dict | None = None) -> None:
+    """Mark ``step`` done, with the (non-secret) choice made there, in one atomic write."""
     check(home, step)
-    done = _completed(home) + [step]
+    data = _read(home)
+    data["completed"] = list(data.get("completed", [])) + [step]
+    if choice is not None:
+        data["choices"] = {**dict(data.get("choices", {})), step: choice}
     home.state_dir.mkdir(parents=True, exist_ok=True)
     tmp = _path(home).with_suffix(".tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
-        f.write(json.dumps({"completed": done}))
+        f.write(json.dumps(data))
     os.chmod(tmp, 0o600)
     os.replace(tmp, _path(home))
 

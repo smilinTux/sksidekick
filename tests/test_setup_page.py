@@ -129,3 +129,30 @@ def test_page_served_with_its_assets(bare_home):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def _refresh_body(js: str) -> str:
+    start = js.index("async function refresh(")
+    return js[start: js.index("\n  }\n", start)]
+
+
+def test_only_the_first_load_resumes_a_phrase():
+    """A 409 handler awaits refresh(); if that re-entered newPhrase while the flag was set, a lasting 409
+    on phrase/new would loop forever. Only the first load may resume, and it clears the flag first."""
+    js = _read("setup.js")
+    body = _refresh_body(js)
+    assert body.count("newPhrase()") == 1
+    call = body.index("newPhrase()")
+    clear = body.rfind('store(OPEN_KEY, "")', 0, call)
+    guard = body.rfind("resume === true", 0, call)
+    assert 0 <= guard < clear < call
+    assert re.findall(r"\brefresh\(([^)]*)\)", js).count("true") == 1
+    assert "refresh(true);\n})();" in js  # the first load, at the very end
+    send = js[js.index("async function send("): js.index("// ---- messages")]
+    assert "newPhrase" not in send and "await refresh();" in send
+
+
+def test_finished_steps_show_their_choice():
+    js = _read("setup.js")
+    for frag in ('"tier-" + c.tier.tier', '"ch-" + id', '"p-" + c.personality.type', '"voice-" + c.personality.voice'):
+        assert frag in js, frag
