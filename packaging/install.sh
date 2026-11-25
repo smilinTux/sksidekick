@@ -154,10 +154,11 @@ open_url() {  # the address is always printed; a browser is opened when there is
 if [ -z "$no_init" ] && [ "$mode" != init ] && [ ! -f "$home/state/instance.json" ]; then
     say "Setup page: choose the model, channels and personality, and write down your recovery phrase"
     echo "Setup runs here until you finish it in the browser. Ctrl-C stops it; start it again with:"
-    echo "    sksidekick --home \"$home\" setup"
+    echo "    sksidekick --home \"$home\" setup --port 0"
     set +e
-    # PATH: setup writes the model choice with this install's own hermes.
-    PATH="$app/bin:$PATH" "$app/bin/sksidekick" --home "$home" setup | while IFS= read -r line; do
+    # PATH: setup writes the model choice with this install's own hermes. Port 0: any free loopback port
+    # (the address is printed and opened, so it need not be fixed; 8765 may be taken on this computer).
+    PATH="$app/bin:$PATH" "$app/bin/sksidekick" --home "$home" setup --port 0 | while IFS= read -r line; do
         case "$line" in
             "Open http"*) open_url "${line#Open }" ;;
             *) printf '%s\n' "$line" ;;
@@ -165,7 +166,7 @@ if [ -z "$no_init" ] && [ "$mode" != init ] && [ ! -f "$home/state/instance.json
     done
     rc="${PIPESTATUS[0]}"
     set -e
-    [ "$rc" = 0 ] || die "setup did not finish (exit $rc); start it again: sksidekick --home \"$home\" setup"
+    [ "$rc" = 0 ] || die "setup did not finish (exit $rc); start it again: sksidekick --home \"$home\" setup --port 0"
 fi
 
 echo "Done. Your sidekick's home: $home"

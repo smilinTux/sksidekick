@@ -96,7 +96,7 @@ def test_phrase_sentence_verbatim():
 
 def test_no_dashes_in_page_files():
     for f in _text_files():
-        assert not re.search("[–—]", f.read_text()), f.name
+        assert not re.search(r"[\u2013\u2014]", f.read_text()), f.name
 
 
 def test_page_served_with_its_assets(bare_home):

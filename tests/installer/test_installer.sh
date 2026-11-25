@@ -9,11 +9,34 @@ ok() { echo "ok: $*"; }
 
 if [ "$(uname -s)" = Darwin ]; then app="$HOME/Library/Application Support/sksidekick-app"; else app="${XDG_DATA_HOME:-$HOME/.local/share}/sksidekick-app"; fi
 
-out="$(bash "$repo/packaging/install.sh" --home "$H" 2>&1)" || { printf '%s\n' "$out" | tail -60; fail "install.sh failed"; }
-printf '%s\n' "$out" | tail -15
-phrase="$(printf '%s\n' "$out" | grep -oE '([0-9A-HJKMNP-TV-Z]{5}-){7}[0-9A-HJKMNP-TV-Z]{5}' | head -1)"
-[ -n "$phrase" ] || fail "no recovery phrase shown"
-ok "installed, and the recovery phrase was shown"
+# install.sh runs setup in the foreground until it is finished; walk it over HTTP the way the page would.
+work="$(mktemp -d)"
+log="$work/install.log"
+mkdir -p "$work/usb"
+python3 "$repo/tests/image/stub_model.py" 18999 >"$work/stub.log" 2>&1 &
+stub=$!
+bash "$repo/packaging/install.sh" --home "$H" --setup-headless >"$log" 2>&1 &
+inst=$!
+trap 'kill "$stub" 2>/dev/null || true; kill "$inst" 2>/dev/null || true; rm -rf "$work"' EXIT
+url=""
+for _ in $(seq 1200); do  # the install itself takes minutes
+    url="$(sed -n 's|^Setup page (open it in a browser on this computer): ||p' "$log" | tail -1)"
+    [ -n "$url" ] && break
+    kill -0 "$inst" 2>/dev/null || { tail -60 "$log"; fail "install.sh ended before setup started"; }
+    sleep 1
+done
+[ -n "$url" ] || { tail -60 "$log"; fail "install.sh printed no setup address"; }
+case "$url" in http://127.0.0.1:*/\?t=*) ;; *) fail "the setup address is not on loopback: ${url%%\?*}";; esac
+ok "install.sh started the setup page on loopback (--setup-headless)"
+exec 4>&1
+phrase="$(SETUP_WALK_BACKUP_DIR="$work/usb" bash "$repo/tests/setup_walk.sh" "${url%%/\?t=*}" "${url##*\?t=}" 3>&1 1>&4)" \
+    || { tail -40 "$log"; fail "the setup walk failed"; }
+exec 4>&-
+[ -n "$phrase" ] || fail "the walk handed back no phrase"
+wait "$inst" || { tail -60 "$log"; fail "install.sh failed"; }
+tail -15 "$log"
+grep -qF "$phrase" "$log" && fail "the recovery phrase was printed by install.sh"
+ok "installed and set up through the page"
 
 if [ "$(uname -s)" = Darwin ]; then
     launchctl print "gui/$(id -u)/io.skworld.sksidekick" >/dev/null || fail "launchd agent not loaded"
@@ -35,7 +58,7 @@ ok "the service runs sksidekick serve"
 HERMES_HOME="$H/hermes" "$app/bin/hermes" config get memory.provider | grep -qx skmemory || fail "memory.provider is not skmemory"
 ok "the sidekick's Hermes home uses the skmemory provider"
 
-grep -rqF "$phrase" "$app" "$H" 2>/dev/null && fail "the recovery phrase was written to disk"
+grep -rqF "$phrase" "$app" "$H" "$work" 2>/dev/null && fail "the recovery phrase was written to disk"
 ok "the phrase is not stored anywhere"
 
 bash "$repo/packaging/install.sh" --uninstall --home "$H"
