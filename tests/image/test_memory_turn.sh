@@ -3,7 +3,7 @@
 #   tests/image/test_memory_turn.sh IMAGE
 # Regression for 2026-11-25: hermes-skmemory 0.2.0 passed Hermes' own PYTHONPATH (its 3.14 site-packages) to
 # skmemory-mcp, which then died importing pydantic_core; the plugin hides the child's stderr, so the turn was
-# answered and silently never stored. 0.2.1 hands the child an allowlisted environment.
+# answered and silently never stored. 0.2.1 hands the child an allowlisted environment; 0.2.2 keeps its stderr.
 # No pipefail: every check pipes into grep -q, which exits early and makes the writer die of SIGPIPE (141),
 # turning a match into a failure, or worse, hiding a match in a "should not appear" check.
 set -eu
@@ -48,6 +48,8 @@ if ! wait_for_quiet 30 remembered; then
     echo "--- plugin store"; docker exec "$C" sh -c 'find /opt/data/sidekick/hermes/.skmemory 2>/dev/null | head -30' || true
     echo "--- skmemory in hermes logs"
     docker exec "$C" sh -c 'grep -rhi "skmemory" /opt/data/sidekick/hermes/logs 2>/dev/null | tail -20' || true
+    echo "--- skmemory-mcp stderr (hermes-skmemory 0.2.2+ keeps it)"
+    docker exec "$C" sh -c 'tail -40 /opt/data/sidekick/hermes/logs/skmemory-mcp-sidekick.log 2>/dev/null' || true
     echo "--- refusals and memory warnings in every Hermes log"
     docker exec "$C" sh -c 'grep -rhiE "refused|memory (hook|tool)|sync_turn|owner" /opt/data/sidekick/hermes/logs /opt/data/logs 2>/dev/null | tail -25' || true
     echo "--- HERMES/SK environment seen by docker exec"
