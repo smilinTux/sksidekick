@@ -49,10 +49,15 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Security-Policy", "default-src 'self'")
+        self.send_header("Referrer-Policy", "no-referrer")
         for k, v in (extra or {}).items():
             self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
+
+    def log_request(self, code="-", size="-") -> None:
+        """Log method, path and status only: the query string carries the token."""
+        self.log_message("%s %s %s", self.command, urlsplit(self.path).path, str(code))
 
     def _json(self, status: int, obj: dict) -> None:
         self._send(status, json.dumps(obj).encode(), "application/json")
@@ -110,10 +115,13 @@ class _Handler(BaseHTTPRequestHandler):
                 already = step in state.load(home)["completed"]
                 msg = "that step is already done" if already else "finish the earlier step first"
                 return self._json(409, {"error": msg})
-            result = handler(home, body) if handler else {}
-            if action is None:
-                state.advance(home, step)
-            finished = state.is_complete(home)
+            try:
+                result = handler(home, body) if handler else {}
+                if action is None:
+                    state.advance(home, step)
+                finished = state.is_complete(home)
+            except Exception:  # no detail, no traceback: a handler may hold the recovery phrase
+                return self._json(500, {"error": "internal error"})
         if finished:
             threading.Thread(target=self.server.shutdown, daemon=True).start()
         self._json(200, result if isinstance(result, dict) else {})

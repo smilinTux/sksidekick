@@ -46,7 +46,10 @@ def advance(home: Home, step: str) -> None:
     done = _completed(home) + [step]
     home.state_dir.mkdir(parents=True, exist_ok=True)
     tmp = _path(home).with_suffix(".tmp")
-    tmp.write_text(json.dumps({"completed": done}))
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(json.dumps({"completed": done}))
+    os.chmod(tmp, 0o600)
     os.replace(tmp, _path(home))
 
 

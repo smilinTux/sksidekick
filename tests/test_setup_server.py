@@ -148,3 +148,34 @@ def test_done_shuts_the_server_down(bare_home, capsys):
         assert call(port, "POST", f"/api/{s}", cookie=tok, header=tok)[0] == 200
     t.join(5)
     assert done["rc"] == 0
+
+
+def test_token_never_reaches_stderr_and_referrer_policy(running, capfd):
+    _, port = running
+    _, headers, _ = call(port, "GET", f"/?t={TOKEN}")
+    call(port, "GET", f"/?t=wrong-{TOKEN}")
+    assert headers["Referrer-Policy"] == "no-referrer"
+    err = capfd.readouterr().err
+    assert TOKEN not in err and "?t=" not in err
+    assert "GET /" in err
+
+
+def test_handler_exception_is_a_bare_500(running, capfd):
+    home, port = running
+    def boom(home, body):
+        raise RuntimeError("secret-phrase-detail")
+    server.ROUTES[("tier", None)] = boom
+    try:
+        status, headers, data = call(port, "POST", "/api/tier", cookie=TOKEN, header=TOKEN)
+    finally:
+        del server.ROUTES[("tier", None)]
+    assert status == 500 and json.loads(data) == {"error": "internal error"}
+    assert headers["Referrer-Policy"] == "no-referrer"
+    out = capfd.readouterr()
+    assert "secret-phrase-detail" not in out.err + out.out and "Traceback" not in out.err
+    assert state.load(home)["next"] == "tier"
+
+
+def test_setup_file_is_0600(bare_home):
+    state.advance(bare_home, "tier")
+    assert ((bare_home.state_dir / "setup.json").stat().st_mode & 0o777) == 0o600
