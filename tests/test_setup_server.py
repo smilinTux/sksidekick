@@ -179,3 +179,42 @@ def test_handler_exception_is_a_bare_500(running, capfd):
 def test_setup_file_is_0600(bare_home):
     state.advance(bare_home, "tier")
     assert ((bare_home.state_dir / "setup.json").stat().st_mode & 0o777) == 0o600
+
+
+def _raw(port, data: bytes) -> bytes:
+    import socket
+    s = socket.create_connection(("127.0.0.1", port), timeout=5)
+    s.sendall(data)
+    out = b""
+    try:
+        while chunk := s.recv(4096):
+            out += chunk
+    except socket.timeout:
+        pass
+    s.close()
+    return out
+
+
+@pytest.mark.parametrize("line", [f"GET/?t={TOKEN}", "BADLINE", "GET", f"GET /?t={TOKEN} HTTP/1.1 extra junk"])
+def test_malformed_request_line_is_safe(running, capfd, line):
+    _, port = running
+    resp = _raw(port, line.encode() + b"\r\n\r\n")
+    assert resp.startswith(b"HTTP/1.") or b"error" in resp.lower()
+    assert b"Referrer-Policy: no-referrer" in resp and b"Content-Security-Policy" in resp
+    err = capfd.readouterr().err
+    assert TOKEN not in err and "Traceback" not in err
+
+
+def test_put_gets_json_with_security_headers(running):
+    _, port = running
+    status, headers, data = call(port, "PUT", "/api/tier")
+    assert status == 403
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    c.request("PUT", "/api/tier", headers={"X-Setup-Token": TOKEN})
+    r = c.getresponse()
+    body = r.read()
+    assert r.status == 405 and "error" in json.loads(body)
+    assert r.getheader("Referrer-Policy") == "no-referrer" and r.getheader("Cache-Control") == "no-store"
+    assert r.getheader("Content-Security-Policy") == "default-src 'self'"
+    c.close()
+    assert headers["Referrer-Policy"] == "no-referrer"
