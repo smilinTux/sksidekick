@@ -556,3 +556,21 @@ def test_damaged_recovery_key_reads_as_damaged_not_wrong_phrase(keyed, tmp_path:
 def _read_members(a: Path) -> dict[str, bytes]:
     with tarfile.open(a) as t:
         return {n: t.extractfile(n).read() for n in t.getnames()}
+
+
+def test_export_skips_a_file_removed_after_listing(keyed, tmp_path: Path, monkeypatch):
+    # The running sidekick can delete a temp file between the listing and the read.
+    home, _ = keyed
+    gone = home.root / "memory" / "short-term" / "vanishing.json"
+    gone.write_text("{}")
+    real = home.story_paths
+
+    def listing():
+        paths = real()
+        gone.unlink()
+        return paths
+
+    monkeypatch.setattr(home, "story_paths", listing)
+    a = archive.export(home, tmp_path / "a.sksk")
+    monkeypatch.undo()
+    assert "memory/short-term/vanishing.json" not in archive.verify(a, keys.load_identity(home))["files"]

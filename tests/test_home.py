@@ -105,3 +105,10 @@ def test_hermes_sessions_included(bare_home: Home):
     assert [str(p) for p in bare_home.story_paths()] == [
         "hermes/.env", "hermes/config.yaml", "hermes/sessions/2026-11-20.jsonl", "hermes/state.db",
     ]
+
+
+def test_sqlite_shm_is_not_story(bare_home: Home):
+    # SQLite's shared-memory index comes and goes while Hermes runs; the move test hit one vanishing
+    # mid-export on 2026-11-25. The database and its -wal stay story.
+    _touch(bare_home, "hermes/response_store.db", "hermes/response_store.db-wal", "hermes/response_store.db-shm")
+    assert [str(p) for p in bare_home.story_paths()] == ["hermes/response_store.db", "hermes/response_store.db-wal"]
