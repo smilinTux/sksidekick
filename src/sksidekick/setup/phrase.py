@@ -133,11 +133,11 @@ def on_start(home: Home) -> None:
 
 def on_stop(home: Home) -> None:
     """The server is stopping: an unconfirmed phrase and its keys go with it. A phrase/new still waiting
-    on the lock is refused afterwards. If setup.json cannot be read the keys are kept (they may be
-    confirmed), and one fixed line says so."""
+    on the lock is refused afterwards. If the check or the shred fails (an unreadable setup.json, say)
+    the keys are left in place (they may be confirmed) and one fixed line says so."""
     with _LOCK:
         _STOPPED.add(str(home.root))
         try:
             _shred_unconfirmed(home)
         except Exception:
-            sys.stderr.write("setup: could not read the setup progress, so the keys were kept\n")
+            sys.stderr.write("setup stopped; unconfirmed keys were left in place, run setup again to clear them\n")

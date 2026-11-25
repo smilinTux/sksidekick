@@ -300,19 +300,30 @@ def test_done_makes_it_live(bare_home, monkeypatch, capsys, tmp_path):
     assert keys.unwrap_identity((bare_home.keys_dir / keys.WRAPPED).read_bytes(), out["phrase"])
 
 
-def _setup_process(home: Home):
+def _start_setup(home: Home):
     import subprocess
     import sys
 
     at_phrase(home)
     env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"), "SKSIDEKICK_HOME": str(home.root)}
-    proc = subprocess.Popen(
+    return subprocess.Popen(
         [sys.executable, "-c", "import sys; from sksidekick.cli import main; sys.exit(main(sys.argv[1:]))", "setup", "--port", "0"],
         env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    line = proc.stdout.readline()
+
+
+def _url(proc, seconds=10.0) -> tuple[int, str]:
+    """The first stdout line, read with a deadline (a reader thread), as (port, token)."""
+    import queue
+
+    q: queue.Queue = queue.Queue()
+    threading.Thread(target=lambda: q.put(proc.stdout.readline()), daemon=True).start()
+    try:
+        line = q.get(timeout=seconds)
+    except queue.Empty:
+        line = ""
     m = re.search(r"Open http://127\.0\.0\.1:(\d+)/\?t=(\S+)", line)
-    assert m, line
-    return proc, int(m.group(1)), m.group(2)
+    assert m, "setup did not print its address in time"
+    return int(m.group(1)), m.group(2)
 
 
 @pytest.mark.parametrize("signame, code", [("SIGTERM", 143), ("SIGHUP", 129)])
@@ -321,18 +332,21 @@ def test_signal_stop_shreds_unconfirmed_keys(bare_home, signame, code):
 
     if not hasattr(signal, signame):
         pytest.skip(f"no {signame} here")
-    proc, port, tok = _setup_process(bare_home)
+    proc = _start_setup(bare_home)
     try:
+        port, tok = _url(proc)
         status, out, _, _ = post(port, "/api/phrase/new", tok=tok)
         assert status == 200 and key_files(bare_home)
         proc.send_signal(getattr(signal, signame))
-        assert proc.wait(timeout=10) == code
+        _, err = proc.communicate(timeout=10)
+        assert proc.returncode == code
     finally:
         if proc.poll() is None:
             proc.kill()
-            proc.wait(5)
+        proc.wait(5)
+        proc.stdout.close()
+        proc.stderr.close()
     assert key_files(bare_home) == []
-    err = proc.stderr.read()
     assert out["phrase"] not in err and not any(g in err for g in out["phrase"].split("-"))
 
 
@@ -352,5 +366,36 @@ def test_corrupt_progress_keeps_keys_and_says_so(at_phrase_running, capfd):
     (home.state_dir / "setup.json").write_text("{not json")
     phrase.on_stop(home)
     assert key_files(home)
-    assert "could not read the setup progress, so the keys were kept" in capfd.readouterr().err
+    assert "setup stopped; unconfirmed keys were left in place, run setup again to clear them" in capfd.readouterr().err
     assert str(home.root) not in phrase._PENDING
+
+
+def test_signals_ignored_during_stop_shred_and_restored(bare_home, monkeypatch):
+    """main_setup in the main thread: on_stop runs with SIGTERM/SIGHUP ignored, then the old handlers are back."""
+    import signal
+
+    assert threading.current_thread() is threading.main_thread()
+    sigs = [getattr(signal, n) for n in ("SIGTERM", "SIGHUP") if hasattr(signal, n)]
+    before = {s: signal.getsignal(s) for s in sigs}
+    seen = {}
+    real_stop = phrase.on_stop
+
+    def on_stop(home):
+        seen.update({s: signal.getsignal(s) for s in sigs})
+        real_stop(home)
+
+    monkeypatch.setattr(phrase, "on_stop", on_stop)
+    real_make = server.make_server
+
+    def make(*a, **k):
+        srv = real_make(*a, **k)
+        seen["installed"] = {s: signal.getsignal(s) for s in sigs}
+        threading.Timer(0.1, srv.shutdown).start()  # a normal, non-signal stop
+        return srv
+
+    monkeypatch.setattr(server, "make_server", make)
+    at_phrase(bare_home)
+    assert server.main_setup(bare_home, "127.0.0.1", 0) == 0
+    assert all(seen["installed"][s] is server._raise_stopped for s in sigs)
+    assert all(seen[s] == signal.SIG_IGN for s in sigs)
+    assert {s: signal.getsignal(s) for s in sigs} == before

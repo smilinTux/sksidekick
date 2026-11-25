@@ -200,24 +200,25 @@ class _Stopped(BaseException):
 
 
 def _raise_stopped(signum, frame) -> None:
-    for name in ("SIGTERM", "SIGHUP"):  # a second signal must not interrupt the shred
-        if hasattr(signal, name):
-            signal.signal(getattr(signal, name), signal.SIG_IGN)
+    for sig in _stop_signals():  # a second signal must not interrupt the shred
+        signal.signal(sig, signal.SIG_IGN)
     raise _Stopped(signum)
 
 
-def _catch_stop_signals() -> dict:
+def _stop_signals() -> list:
+    return [getattr(signal, n) for n in ("SIGTERM", "SIGHUP") if hasattr(signal, n)]
+
+
+def _catch_stop_signals(previous: dict) -> None:
     """docker stop, systemd, kill and a closed terminal end the process without `finally`: turn them into
-    an exception. Only the main thread may set handlers (tests run main_setup in a thread). Returns the
-    previous handlers, to put back."""
+    an exception. Only the main thread may set handlers (tests run main_setup in a thread). Every previous
+    handler goes into ``previous`` before any new one is installed, so the restore is always complete."""
     if threading.current_thread() is not threading.main_thread():
-        return {}
-    previous = {}
-    for name in ("SIGTERM", "SIGHUP"):
-        sig = getattr(signal, name, None)
-        if sig is not None:
-            previous[sig] = signal.signal(sig, _raise_stopped)
-    return previous
+        return
+    for sig in _stop_signals():
+        previous[sig] = signal.getsignal(sig)
+    for sig in previous:
+        signal.signal(sig, _raise_stopped)
 
 
 def make_server(home: Home, host: str, port: int, token: str) -> ThreadingHTTPServer:
@@ -237,7 +238,7 @@ def main_setup(home: Home, host: str = "127.0.0.1", port: int = 8765) -> int:
     token = secrets.token_urlsafe(32)
     previous: dict = {}
     try:
-        previous.update(_catch_stop_signals())
+        _catch_stop_signals(previous)
         srv = make_server(home, host, port, token)
         print(f"Open http://{host}:{srv.server_address[1]}/?t={token}", flush=True)
         try:
@@ -249,6 +250,8 @@ def main_setup(home: Home, host: str = "127.0.0.1", port: int = 8765) -> int:
     except _Stopped as e:
         return 128 + e.signum
     finally:
+        for sig in previous:  # however we got here, no signal may interrupt the shred below
+            signal.signal(sig, signal.SIG_IGN)
         phrase.on_stop(home)  # an unconfirmed phrase and its keys never outlive the server
         for sig, handler in previous.items():
             signal.signal(sig, handler)
