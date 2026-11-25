@@ -37,10 +37,7 @@ jobs:
             -t "sksidekick:${{ matrix.arch }}" .
       - name: Image checks
         run: bash tests/image/test_image.sh "sksidekick:${{ matrix.arch }}"
-      - name: A Hermes turn becomes a memory (KNOWN OPEN, see PR #3)
-        # Kept visible on every run, not hidden: the turn is answered but never stored in the sk.4 image.
-        # continue-on-error so it does not hide the move test behind it; remove once it passes.
-        continue-on-error: true
+      - name: A Hermes turn becomes a memory
         run: bash tests/image/test_memory_turn.sh "sksidekick:${{ matrix.arch }}"
       - name: User systemd session (for the move test)
         if: matrix.arch == 'amd64'

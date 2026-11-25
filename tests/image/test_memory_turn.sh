@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # One real Hermes turn must become a memory inside the sidekick home, and a backup must keep it:
 #   tests/image/test_memory_turn.sh IMAGE
-# KNOWN OPEN (2026-11-21): in the sk.4 image the turn is answered but never stored (see STATUS / PR #3).
+# Regression for 2026-11-25: hermes-skmemory 0.2.0 passed Hermes' own PYTHONPATH (its 3.14 site-packages) to
+# skmemory-mcp, which then died importing pydantic_core; the plugin hides the child's stderr, so the turn was
+# answered and silently never stored. 0.2.1 hands the child an allowlisted environment.
 # No pipefail: every check pipes into grep -q, which exits early and makes the writer die of SIGPIPE (141),
 # turning a match into a failure, or worse, hiding a match in a "should not appear" check.
 set -eu
