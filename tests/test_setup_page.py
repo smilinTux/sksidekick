@@ -89,7 +89,7 @@ def test_token_kept_per_tab_and_nothing_else_stored():
     lines = [ln for ln in js.splitlines() if "sessionStorage" in ln and not ln.lstrip().startswith("//")]
     assert lines, "the token is not kept for a reload"
     assert all("try {" in ln and "catch" in ln for ln in lines), lines
-    keys = re.findall(r"\bstore\(\s*([A-Za-z_]+)", js)
+    keys = re.findall(r"(?<!function )\bstore\(\s*([A-Za-z_]+)", js)
     assert keys and set(keys) <= {"TOKEN_KEY", "OPEN_KEY"}, keys
     assert re.search(r"get\(\"t\"\)\s*\|\|\s*stored\(TOKEN_KEY\)", js), "?t= first, then sessionStorage"
 
