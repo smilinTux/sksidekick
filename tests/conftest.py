@@ -52,8 +52,14 @@ class FakeHermes:
             return []
         return [json.loads(line) for line in self.log.read_text().splitlines() if line]
 
+    def config_file(self) -> Path | None:
+        """The config.yaml (JSON content) of the HERMES_HOME the last call used."""
+        calls = self.calls()
+        return Path(calls[-1]["hermes_home"]) / "config.yaml" if calls else None
+
     def get(self, key: str) -> str | None:
-        return json.loads(self.store.read_text()).get(key) if self.store.exists() else None
+        f = self.config_file()
+        return json.loads(f.read_text()).get(key) if f and f.exists() else None
 
 
 _FAKE_HERMES = """#!{python}
@@ -62,9 +68,10 @@ log, store = {log!r}, {store!r}
 argv = sys.argv[1:]
 with open(log, "a") as f:
     f.write(json.dumps({{"argv": argv, "hermes_home": os.environ.get("HERMES_HOME")}}) + "\\n")
+cfg = os.path.join(os.environ["HERMES_HOME"], "config.yaml")
 def load():
     try:
-        return json.load(open(store))
+        return json.load(open(cfg))
     except FileNotFoundError:
         return {{}}
 if argv[:2] == ["config", "set"] and len(argv) == 4:
@@ -75,9 +82,13 @@ if argv[:2] == ["config", "set"] and len(argv) == 4:
         sys.exit(1)
     data = load()
     data[argv[2]] = argv[3]
-    json.dump(data, open(store, "w"))
+    json.dump(data, open(cfg, "w"))
 elif argv[:2] == ["config", "get"] and len(argv) == 3:
-    print(load().get(argv[2], ""))
+    data = load()
+    if argv[2] not in data:
+        sys.stderr.write("Config key not set: " + argv[2] + "\\n")
+        sys.exit(1)
+    print(data[argv[2]])
 else:
     sys.exit(2)
 """
