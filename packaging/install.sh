@@ -64,7 +64,7 @@ if [ -n "$uninstall" ]; then
     rm -rf "$app"
     echo "Removed the sksidekick app and its service."
     echo "Your sidekick's data is still here: $home"
-    echo "To delete it permanently: sksidekick --home \"$home\" delete --yes"
+    echo "To delete it permanently, install again and run: \"$app/bin/sksidekick\" --home \"$home\" delete --yes"
     exit 0
 fi
 
@@ -123,10 +123,10 @@ ln -sf "$app/bin/sksidekick" "$HOME/.local/bin/sksidekick"
 ln -sf "$app/bin/sksidekick-setup" "$HOME/.local/bin/sksidekick-setup"
 
 if [ -n "$no_init" ]; then
-    say "No sidekick created. Import yours: sksidekick --home \"$home\" import ARCHIVE --phrase-stdin"
+    say "No sidekick created. Import yours: \"$app/bin/sksidekick\" --home \"$home\" import ARCHIVE --phrase-stdin"
 elif [ "$mode" = init ] && [ ! -f "$home/state/instance.json" ]; then
     say "Creating your sidekick in $home"
-    "$app/bin/sksidekick" --home "$home" init
+    "$app/bin/sksidekick" --home "$home" init || die "could not create the sidekick in $home (a setup that stopped half way leaves files there). Go on with that setup: \"$app/bin/sksidekick-setup\"; or throw it away with \"$app/bin/sksidekick-setup\" --start-over, then run install.sh --init again."
 fi
 
 # The service runs with SKSIDEKICK_SETUP=off: setup is started below, in this terminal, never by the
@@ -151,8 +151,8 @@ if [ -z "$no_init" ] && [ "$mode" != init ] && [ ! -f "$home/state/instance.json
     [ "$mode" = headless ] && flag="--headless"
     rc=0
     "$app/bin/sksidekick-setup" $flag || rc=$?
-    [ "$rc" = 0 ] || die "setup stopped (exit $rc). Run sksidekick-setup (in $HOME/.local/bin) to go on where it stopped, or run install.sh again."
+    [ "$rc" = 0 ] || die "setup stopped (exit $rc). Run \"$app/bin/sksidekick-setup\" to go on where it stopped (add --start-over to begin again), or run install.sh again."
 fi
 
 echo "Done. Your sidekick's home: $home"
-echo "Check it any time with: sksidekick --home \"$home\" status"
+echo "Check it any time with: \"$app/bin/sksidekick\" --home \"$home\" status"

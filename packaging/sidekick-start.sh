@@ -50,9 +50,9 @@ fi
 while [ ! -f "$home/state/instance.json" ]; do
     if [ -z "$said" ]; then
         if [ -n "${SIDEKICK_SETUP_CMD:-}" ]; then  # a plain install's service: setup runs in a terminal
-            echo "No sidekick here yet. Run $SIDEKICK_SETUP_CMD in a terminal to set it up (or sksidekick --home \"$home\" import ARCHIVE --phrase-stdin when moving here)."
+            echo "No sidekick here yet. Run \"$SIDEKICK_SETUP_CMD\" in a terminal to set it up, or \"$SIDEKICK_SETUP_CMD\" --start-over to throw away a setup that stopped half way (or \"$bin/sksidekick\" --home \"$home\" import ARCHIVE --phrase-stdin when moving here)."
         else
-            echo "No sidekick here yet. Run: docker exec -it <container> sksidekick init   (or sksidekick import ARCHIVE --phrase-stdin)"
+            echo "No sidekick here yet. Run: docker exec -it <container> sksidekick init   (or sksidekick import ARCHIVE --phrase-stdin). If a setup stopped half way, first: docker exec -it <container> sksidekick setup --start-over"
         fi
         said=1
     fi
@@ -66,7 +66,11 @@ export HERMES_HOME="$home/hermes"
 code=0
 "$bin/sksidekick" serve || code=$?
 if ! "$bin/python" -c 'import json, os, sys; s = json.load(open(os.path.join(sys.argv[1], "state", "instance.json")))["status"]; sys.exit(0 if s == "live" else 1)' "$home"; then
-    echo "This copy is not the live sidekick (moved out or retired). It stays stopped. When the new place works: docker exec <container> sksidekick retire --yes"
+    if [ -n "${SIDEKICK_SETUP_CMD:-}" ]; then
+        echo "This copy is not the live sidekick (moved out or retired). It stays stopped. When the new place works: \"$bin/sksidekick\" --home \"$home\" retire --yes"
+    else
+        echo "This copy is not the live sidekick (moved out or retired). It stays stopped. When the new place works: docker exec <container> sksidekick retire --yes"
+    fi
     exec sleep infinity
 fi
 exit "$code"

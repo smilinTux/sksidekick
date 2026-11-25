@@ -50,3 +50,47 @@ def test_install_uses_the_wrapper_and_points_at_it():
     assert " setup --port" not in install  # no second copy of the setup call
     assert "sksidekick-setup" in install.split('die "setup stopped', 1)[1].split("\n", 1)[0]
     assert _unit()["SIDEKICK_SETUP_CMD"] == "@APP@/bin/sksidekick-setup" == _plist()["SIDEKICK_SETUP_CMD"]
+
+
+def _rendered_wrapper(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """sksidekick-setup rendered as install.sh does, into an app dir with a space (as on macOS)."""
+    import os
+
+    app, home = tmp_path / "Application Support" / "sksidekick-app", tmp_path / "sk home"
+    (app / "bin").mkdir(parents=True)
+    fake = app / "bin" / "sksidekick"
+    fake.write_text('#!/bin/sh\nprintf "%s|" "$@"\n')
+    fake.chmod(0o755)
+    text = (PKG / "sksidekick-setup.sh").read_text().replace("@APP@", str(app)).replace("@HOME@", str(home))
+    w = app / "bin" / "sksidekick-setup"
+    w.write_text(text)
+    os.chmod(w, 0o755)
+    return w, app, home
+
+
+def test_wrapper_passes_start_over_through(tmp_path):
+    import subprocess
+
+    w, app, home = _rendered_wrapper(tmp_path)
+    for args, want in ((["--start-over"], ["--home", str(home), "setup", "--start-over"]),
+                       (["--start-over", "--yes"], ["--home", str(home), "setup", "--start-over", "--yes"]),
+                       (["--yes", "--start-over"], ["--home", str(home), "setup", "--start-over", "--yes"])):
+        r = subprocess.run(["bash", str(w), *args], capture_output=True, text=True, timeout=30)
+        assert r.returncode == 0, r.stderr
+        assert r.stdout.split("|")[:-1] == want
+    r = subprocess.run(["bash", str(w), "--yes"], capture_output=True, text=True, timeout=30)
+    assert r.returncode == 2 and "--start-over" in r.stderr
+
+
+def test_suggested_commands_are_full_quoted_paths():
+    """~/.local/bin is not on PATH on macOS, and the app path holds a space: name commands by full path, quoted."""
+    start = (PKG / "sidekick-start.sh").read_text()
+    assert '\\"$SIDEKICK_SETUP_CMD\\"' in start and " $SIDEKICK_SETUP_CMD " not in start
+    install = (PKG / "install.sh").read_text()
+    for line in install.splitlines():
+        if line.lstrip().startswith(("die ", "say ", "echo ")) or "|| die " in line:
+            for cmd in ("sksidekick-setup", "sksidekick --home"):
+                if cmd in line:
+                    assert f'\\"$app/bin/{cmd.split()[0]}\\"' in line, line
+    wrapper = (PKG / "sksidekick-setup.sh").read_text()
+    assert 'run \\"$app/bin/sksidekick-setup\\" again' in wrapper

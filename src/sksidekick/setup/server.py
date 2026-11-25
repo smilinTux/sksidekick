@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import os
 import secrets
 import shlex
 import shutil
@@ -19,7 +20,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from sksidekick.home import Home
-from sksidekick.setup import backup_step, channels, phrase, soul, state, tier
+from sksidekick.setup import backup_step, channels, phrase, soul, start_over, state, tier
 
 COOKIE = "setup_token"
 HEADER = "X-Setup-Token"
@@ -285,6 +286,19 @@ def main_setup(home: Home, host: str = "127.0.0.1", port: int = 8765) -> int:
     if (inst.exists() and not setup.exists()) or (setup.exists() and state.is_complete(home)):
         print(f"{home.root} is already set up", file=sys.stderr)
         return 1
+    # Held (shared) while this server runs: `setup --start-over` needs the home to itself.
+    lock = start_over.hold(home, exclusive=False)
+    if lock is None:
+        print(f"{home.root} is being started over (sksidekick setup --start-over); run setup when it has finished",
+              file=sys.stderr)
+        return 1
+    try:
+        return _run(home, host, port)
+    finally:
+        os.close(lock)
+
+
+def _run(home: Home, host: str, port: int) -> int:
     phrase.on_start(home)  # keys from a setup that died before its phrase was confirmed
     token = secrets.token_urlsafe(32)
     previous: dict = {}
