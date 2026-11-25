@@ -45,7 +45,7 @@ nc_state="$(printf '%s' "$st" | python3 -c '
 import json, sys
 c = next(c for c in json.load(sys.stdin)["channels"] if c["id"] == "nextcloud-talk")
 print(("on " if c["enabled"] else "off ") + " ".join(c["fields"]))')"
-plugin="$(docker exec "$C" sh -c 'find / -xdev -type d -path "*plugins*" -name nctalk 2>/dev/null | head -1')"
+plugin="$(docker exec "$C" sh -c 'find / -xdev -type d -path "*plugins*" \( -name nctalk -o -name nextcloud_talk -o -name nextcloud-talk \) 2>/dev/null | head -1')"
 if [ -n "$plugin" ]; then
     for name in ${nc_state#* }; do
         docker exec "$C" grep -rqF "$name" "$plugin" || fail "the nctalk plugin at $plugin never reads $name"
@@ -88,11 +88,18 @@ wait_for 30 "memory.provider skmemory" sh -c "docker exec -u hermes '$C' sidekic
 ok "setup layered on the Hermes seed (seed setting kept, model chosen, skmemory provider)"
 
 patterns="$(printf '%s\n%s\n' "$phrase" "$(printf '%s' "$phrase" | tr -d -)")"
-# grep: 0 is a match (a leak), 1 is clean, anything else means the search itself failed.
-rc=0; printf '%s\n' "$patterns" | docker exec -i "$C" grep -rqsF -f - /opt/data || rc=$?
-case "$rc" in 0) fail "the recovery phrase was written to a file under /opt/data";; 1) ;; *) fail "could not search /opt/data for the phrase (grep exit $rc)";; esac
-rc=0; docker logs "$C" 2>&1 | grep -qF -f <(printf '%s\n' "$patterns") || rc=$?
-case "$rc" in 0) fail "the recovery phrase is in the container log";; 1) ;; *) fail "could not search the container log (grep exit $rc)";; esac
+# tests/leak_search.sh: patterns on stdin, prints the files that hold one; fails only when it cannot search.
+docker cp "$here/../leak_search.sh" "$C:/tmp/leak_search.sh"
+out="$(printf '%s\n' "$patterns" | docker exec -i "$C" sh /tmp/leak_search.sh /opt/data)" \
+    || fail "could not search /opt/data for the phrase"
+[ -z "$out" ] || fail "the recovery phrase was written to: $out"
+# The log goes to a file first: no pipeline whose first half could fail unseen.
+logdir="$(mktemp -d)"
+docker logs "$C" > "$logdir/container.log" 2>&1 || { rm -rf "$logdir"; fail "could not read the container log"; }
+out="$(printf '%s\n' "$patterns" | sh "$here/../leak_search.sh" "$logdir/container.log")" \
+    || { rm -rf "$logdir"; fail "could not search the container log"; }
+rm -rf "$logdir"
+[ -z "$out" ] || fail "the recovery phrase is in the container log"
 ok "the phrase is in no file under /opt/data and in no log line"
 
 # One real turn against the model setup chose (the same check as test_memory_turn.sh).

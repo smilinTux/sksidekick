@@ -6,11 +6,13 @@ repo="$(cd "$(dirname "$0")/../.." && pwd)"
 H="${RUNNER_TEMP:-$(mktemp -d)}/sk home"   # a space on purpose: macOS homes live under "Application Support"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 ok() { echo "ok: $*"; }
-# no_phrase PHRASE PATH...: grep 0 is a match (a leak), 1 is clean, anything else means the search failed
+# no_phrase PHRASE PATH...: the phrase (with or without its dashes) in no regular file under PATH.
+# tests/leak_search.sh walks the files itself: BSD grep -r exits 2 on a socket even with -s.
 no_phrase() {
-    local p="$1" rc=0; shift
-    grep -rqsF -- "$p" "$@" || rc=$?
-    case "$rc" in 0) fail "the recovery phrase was written to $*";; 1) ;; *) fail "could not search $* for the phrase (grep exit $rc)";; esac
+    local p="$1" out; shift
+    out="$(printf '%s\n%s\n' "$p" "$(printf '%s' "$p" | tr -d -)" | sh "$repo/tests/leak_search.sh" "$@")" \
+        || fail "could not search $* for the phrase"
+    [ -z "$out" ] || fail "the recovery phrase was written to: $out"
 }
 serving() {
     for _ in $(seq 120); do pgrep -f "sksidekick serve" >/dev/null && return 0; sleep 1; done
