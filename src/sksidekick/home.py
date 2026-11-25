@@ -23,7 +23,8 @@ EXCLUDE_DIRS = (
     "hermes/installs", "hermes/runtime", "hermes/audio_cache", "hermes/image_cache", "hermes/plugin-update-checks",
     f"{AGENT_STORE}/logs",
 )
-EXCLUDE_GLOBS = ("*.lock", "*.pid")
+# SQLite rebuilds its shared-memory index (-shm) on open; it is machine-local and comes and goes while Hermes runs.
+EXCLUDE_GLOBS = ("*.lock", "*.pid", "*-shm")
 
 
 def excluded(rel: PurePosixPath | Path | str) -> bool:

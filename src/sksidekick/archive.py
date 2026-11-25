@@ -151,7 +151,10 @@ def export(home: Home, dest: Path, *, purpose: str = "export", with_credentials:
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as t:
         for rel in home.story_paths():
-            data = _story_bytes(home, rel, with_credentials, redacted, redacted_keys)
+            try:
+                data = _story_bytes(home, rel, with_credentials, redacted, redacted_keys)
+            except FileNotFoundError:
+                continue  # removed by the running sidekick after the listing (a journal, a temp file): not part of the story now
             files[rel.as_posix()] = _sha256(data)
             _add(t, f"{STORY}/{rel.as_posix()}", data)
         inner = {
