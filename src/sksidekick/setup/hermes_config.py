@@ -31,26 +31,52 @@ def _env_path(home: Home) -> Path:
     return state.ensure_hermes_dir(home) / ".env"
 
 
-def _rewrite_env(home: Home, key: str, value: str | None) -> None:
-    """Atomically rewrite hermes/.env: replace or drop `key`'s line, keep the rest."""
+def _rewrite_envs(home: Home, changes: dict[str, str | None]) -> None:
+    """Atomically rewrite hermes/.env once: per key, replace or drop its line, keep the rest."""
     path = _env_path(home)
     lines = path.read_text().splitlines() if path.exists() else []
-    kept = [ln for ln in lines if ln.partition("=")[0].strip() != key]
-    if value is not None:
-        i = next((n for n, ln in enumerate(lines) if ln.partition("=")[0].strip() == key), len(kept))
-        kept.insert(min(i, len(kept)), f"{key}={value}")
+    for key, value in changes.items():
+        kept = [ln for ln in lines if ln.partition("=")[0].strip() != key]
+        if value is not None:
+            i = next((n for n, ln in enumerate(lines) if ln.partition("=")[0].strip() == key), len(kept))
+            kept.insert(min(i, len(kept)), f"{key}={value}")
+        lines = kept
     tmp = path.with_name(path.name + ".tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
-        f.write("".join(ln + "\n" for ln in kept))
+        f.write("".join(ln + "\n" for ln in lines))
     os.chmod(tmp, 0o600)
     os.replace(tmp, path)
 
 
-def set_env(home: Home, key: str, value: str) -> None:
-    if any(c in value for c in "\n\r\0") or any(c in key for c in "\n\r\0="):
+def _rewrite_env(home: Home, key: str, value: str | None) -> None:
+    _rewrite_envs(home, {key: value})
+
+
+def _check_env(key: str, value: str) -> None:
+    if any(c in value for c in "\n\r\0") or any(c in key for c in "\n\r\0=") or not key:
         raise ValueError("value may not contain a newline or NUL")
+
+
+def set_env(home: Home, key: str, value: str) -> None:
+    _check_env(key, value)
     _rewrite_env(home, key, value)
+
+
+def set_envs(home: Home, values: dict[str, str]) -> None:
+    """Set several keys in one atomic rewrite; every key and value is checked before anything is written."""
+    for k, v in values.items():
+        _check_env(k, v)
+    _rewrite_envs(home, dict(values))
+
+
+def env_keys(home: Home) -> set[str]:
+    """Keys with a non-empty value in hermes/.env. Read only: never creates the file or directory."""
+    try:
+        text = (home.hermes_dir / ".env").read_text()
+    except OSError:
+        return set()
+    return {k.strip() for k, _, v in (ln.partition("=") for ln in text.splitlines()) if v.strip()}
 
 
 def _write_private(path: Path, data: bytes) -> None:

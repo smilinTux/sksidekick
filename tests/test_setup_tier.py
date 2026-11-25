@@ -12,15 +12,6 @@ from sksidekick.setup import hermes_config, server
 from test_setup_server import TOKEN, call
 
 
-@pytest.fixture
-def running(bare_home: Home):
-    srv = server.make_server(bare_home, "127.0.0.1", 0, TOKEN)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
-    yield bare_home, srv.server_address[1]
-    srv.shutdown()
-    srv.server_close()
-
-
 def post(port, path, body):
     status, _, data = call(port, "POST", path, body, cookie=TOKEN, header=TOKEN)
     return status, json.loads(data)

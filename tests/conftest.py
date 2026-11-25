@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+import threading
+
 from sksidekick.home import Home
 
 
@@ -104,3 +106,18 @@ def fake_hermes(tmp_path: Path, monkeypatch) -> FakeHermes:
     script.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
     return fh
+
+
+SETUP_TOKEN = "tok-for-tests"
+
+
+@pytest.fixture
+def running(bare_home: Home):
+    """A setup server on a free loopback port; shared by the setup step tests."""
+    from sksidekick.setup import server
+
+    srv = server.make_server(bare_home, "127.0.0.1", 0, SETUP_TOKEN)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    yield bare_home, srv.server_address[1]
+    srv.shutdown()
+    srv.server_close()

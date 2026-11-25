@@ -39,3 +39,24 @@ TIERS = (
 
 # Piper voices the personality samples were made with.
 VOICES = {"female": "en_US-amy-medium", "male": "en_US-ryan-medium"}
+
+# Env names read by the nctalk plugin (from its README). Task 6's image test greps the plugin for each.
+NCTALK_ENV_NAMES = ("NEXTCLOUD_TALK_SERVER_URL", "NEXTCLOUD_TALK_USERNAME", "NEXTCLOUD_TALK_APP_PASSWORD")
+NCTALK_DISABLED = "Comes with an invite to our Nextcloud"
+# Field names that hold a secret: never echoed back.
+SECRET_FIELDS = frozenset({"NEXTCLOUD_TALK_APP_PASSWORD", "TELEGRAM_BOT_TOKEN"})
+
+CHANNELS = (
+    {
+        "id": "nextcloud-talk",
+        "title": "Nextcloud Talk",
+        "label": "Stays inside our own server.",
+        "fields": list(NCTALK_ENV_NAMES),
+    },
+    {
+        "id": "telegram",
+        "title": "Telegram",
+        "label": "Telegram also sees the conversation.",
+        "fields": ["TELEGRAM_BOT_TOKEN"],
+    },
+)
