@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -35,3 +37,54 @@ def story_home(bare_home: Home) -> Home:
 def _no_host_hermes(monkeypatch):
     """A developer's own HERMES_HOME must never leak into a test."""
     monkeypatch.delenv("HERMES_HOME", raising=False)
+
+
+class FakeHermes:
+    """A stand-in `hermes` on PATH: logs each call as a JSON line, stores `config set` values."""
+
+    def __init__(self, bin_dir: Path) -> None:
+        self.bin_dir = bin_dir
+        self.log = bin_dir / "hermes-calls.jsonl"
+        self.store = bin_dir / "hermes-config.json"
+
+    def calls(self) -> list[dict]:
+        if not self.log.exists():
+            return []
+        return [json.loads(line) for line in self.log.read_text().splitlines() if line]
+
+    def get(self, key: str) -> str | None:
+        return json.loads(self.store.read_text()).get(key) if self.store.exists() else None
+
+
+_FAKE_HERMES = """#!{python}
+import json, os, sys
+log, store = {log!r}, {store!r}
+argv = sys.argv[1:]
+with open(log, "a") as f:
+    f.write(json.dumps({{"argv": argv, "hermes_home": os.environ.get("HERMES_HOME")}}) + "\\n")
+def load():
+    try:
+        return json.load(open(store))
+    except FileNotFoundError:
+        return {{}}
+if argv[:2] == ["config", "set"] and len(argv) == 4:
+    data = load()
+    data[argv[2]] = argv[3]
+    json.dump(data, open(store, "w"))
+elif argv[:2] == ["config", "get"] and len(argv) == 3:
+    print(load().get(argv[2], ""))
+else:
+    sys.exit(2)
+"""
+
+
+@pytest.fixture
+def fake_hermes(tmp_path: Path, monkeypatch) -> FakeHermes:
+    bin_dir = tmp_path / "fakebin"
+    bin_dir.mkdir()
+    fh = FakeHermes(bin_dir)
+    script = bin_dir / "hermes"
+    script.write_text(_FAKE_HERMES.format(python=sys.executable, log=str(fh.log), store=str(fh.store)))
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    return fh

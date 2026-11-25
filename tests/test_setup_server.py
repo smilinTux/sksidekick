@@ -12,6 +12,12 @@ from sksidekick.setup import server, state
 TOKEN = "tok-for-tests"
 
 
+@pytest.fixture(autouse=True)
+def _plain_tier_step(monkeypatch):
+    """These tests use `tier` as a stand-in first step; the real handler has its own tests."""
+    monkeypatch.setitem(server.ROUTES, ("tier", None), lambda home, body: {})
+
+
 @pytest.fixture
 def running(bare_home: Home):
     srv = server.make_server(bare_home, "127.0.0.1", 0, TOKEN)

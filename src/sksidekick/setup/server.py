@@ -16,7 +16,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from sksidekick.home import Home
-from sksidekick.setup import state
+from sksidekick.setup import state, tier
 
 COOKIE = "setup_token"
 HEADER = "X-Setup-Token"
@@ -26,7 +26,7 @@ MAX_BODY = 1_000_000
 
 # (step, action) -> handler(home, body) -> dict. action is None for the plain form.
 # Later tasks register handlers here; a (step, None) handler runs before the step advances.
-ROUTES: dict[tuple[str, str | None], object] = {}
+ROUTES: dict[tuple[str, str | None], object] = {("tier", None): tier.handle}
 
 _LOCK = threading.Lock()
 
@@ -110,7 +110,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._json(403, {"error": "forbidden"})
             extra = {"Set-Cookie": f"{COOKIE}={self.server.token}; HttpOnly; SameSite=Strict; Path=/"}
         if url.path == "/api/state":
-            return self._send(200, json.dumps(state.load(self.server.home)).encode(), "application/json", extra)
+            out = {**state.load(self.server.home), "tiers": tier.tiers_state()}
+            return self._send(200, json.dumps(out).encode(), "application/json", extra)
         rel = "index.html" if url.path == "/" else url.path[len("/static/"):] if url.path.startswith("/static/") else None
         f = (STATIC / rel).resolve() if rel else None
         if f is None or STATIC.resolve() not in f.parents or not f.is_file():
@@ -150,6 +151,8 @@ class _Handler(BaseHTTPRequestHandler):
                 if action is None:
                     state.advance(home, step)
                 finished = state.is_complete(home)
+        except state.FieldError as e:
+            return self._json(422, {"field": e.field, "error": e.message})
         except Exception:  # no detail, no traceback: a handler may hold the recovery phrase
             return self._json(500, {"error": "internal error"})
         if finished:

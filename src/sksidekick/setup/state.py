@@ -15,6 +15,15 @@ class OutOfOrder(Exception):
     """The step asked for is not the next one."""
 
 
+class FieldError(Exception):
+    """A handler rejects one form field: the router answers 422 {field, error} and does not advance."""
+
+    def __init__(self, field: str, message: str) -> None:
+        super().__init__(message)
+        self.field = field
+        self.message = message
+
+
 def _path(home: Home) -> Path:
     return home.state_dir / "setup.json"
 
