@@ -41,12 +41,7 @@ def _rewrite_envs(home: Home, changes: dict[str, str | None]) -> None:
             i = next((n for n, ln in enumerate(lines) if ln.partition("=")[0].strip() == key), len(kept))
             kept.insert(min(i, len(kept)), f"{key}={value}")
         lines = kept
-    tmp = path.with_name(path.name + ".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write("".join(ln + "\n" for ln in lines))
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, path)
+    _atomic_private(path, "".join(ln + "\n" for ln in lines).encode())
 
 
 def _rewrite_env(home: Home, key: str, value: str | None) -> None:
@@ -79,13 +74,21 @@ def env_keys(home: Home) -> set[str]:
     return {k.strip() for k, _, v in (ln.partition("=") for ln in text.splitlines()) if v.strip()}
 
 
-def write_private(path: Path, data: bytes) -> None:
+def _atomic_private(path: Path, data: bytes) -> None:
+    """Write via <name>.tmp (0600) and rename. A failed write removes the .tmp: it may hold a secret."""
     tmp = path.with_name(path.name + ".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "wb") as f:
-        f.write(data)
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, path)
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)  # gone already after the replace
+
+
+def write_private(path: Path, data: bytes) -> None:
+    _atomic_private(path, data)
 
 
 def snapshot(paths: list[Path]) -> dict[Path, bytes | None]:

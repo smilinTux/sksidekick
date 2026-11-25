@@ -229,3 +229,65 @@ def test_put_gets_json_with_security_headers(running):
     assert r.getheader("Content-Security-Policy") == "default-src 'self'"
     c.close()
     assert headers["Referrer-Policy"] == "no-referrer"
+
+
+def _raw_get(port, path: str, cookie: str | None = None) -> tuple[int, bytes]:
+    """GET a path exactly as given (http.client would not normalise it either, but keep it explicit)."""
+    import socket
+
+    with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+        hdr = f"Cookie: setup_token={cookie}\r\n" if cookie else ""
+        s.sendall(f"GET {path} HTTP/1.1\r\nHost: x\r\n{hdr}Connection: close\r\n\r\n".encode())
+        data = b""
+        while chunk := s.recv(65536):
+            data += chunk
+    head, _, body = data.partition(b"\r\n\r\n")
+    return int(head.split()[1]), body
+
+
+def test_static_files_need_the_token(running):
+    _, port = running
+    for path in ("/static/index.html", "/static/setup.js", "/static/audio/mentor-female.mp3", "/static/audio/x.mp3"):
+        assert call(port, "GET", path)[0] == 403, path
+        assert call(port, "GET", path, cookie="wrong")[0] == 403, path
+        assert call(port, "GET", path + "?t=wrong")[0] == 403, path
+    assert call(port, "GET", "/static/setup.js", cookie=TOKEN)[0] == 200
+
+
+def test_path_traversal_never_serves_a_file(running):
+    _, port = running
+    secret = (server.STATIC.parent / "server.py").read_bytes()[:200]
+    for path in ("/static/../server.py", "/static/%2e%2e/server.py", "/static/%2E%2E/server.py",
+                 "/static/..%2fserver.py", "/static/audio/../../server.py", "/static//etc/passwd",
+                 "/static/%2e%2e/%2e%2e/home.py", "/../server.py"):
+        for cookie in (None, TOKEN):
+            status, body = _raw_get(port, path, cookie)
+            assert status in (403, 404), (path, cookie, status)
+            assert secret not in body and b"import" not in body, path
+
+
+def test_good_query_token_with_a_bad_cookie_cannot_post(running):
+    home, port = running
+    for cookie in (None, "wrong"):
+        c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        headers = {"Content-Type": "application/json", "X-Setup-Token": TOKEN}
+        if cookie:
+            headers["Cookie"] = f"setup_token={cookie}"
+        c.request("POST", f"/api/tier?t={TOKEN}", body="{}", headers=headers)
+        assert c.getresponse().status == 403
+        c.close()
+    assert not (home.state_dir / "setup.json").exists()
+
+
+@pytest.mark.parametrize("container", [False, True])
+def test_state_says_where_setup_runs(running, monkeypatch, container):
+    home, port = running
+    if container:
+        monkeypatch.setenv("SKSIDEKICK_IN_CONTAINER", "1")
+    st = json.loads(call(port, "GET", "/api/state", cookie=TOKEN)[2])
+    assert st["in_container"] is container
+    assert st["platform"] in ("mac", "linux")
+    if container:
+        assert st["chat_command"] == "docker exec -it -u hermes <container> sidekick-hermes chat"
+    else:
+        assert st["chat_command"].startswith(f"HERMES_HOME={home.hermes_dir} ") and st["chat_command"].endswith(" chat")

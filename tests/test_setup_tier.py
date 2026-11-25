@@ -283,3 +283,37 @@ def test_restore_error_does_not_mask_original(bare_home, fake_hermes, monkeypatc
     (bare_home.hermes_dir / ".env").write_text("A=1\n")
     with pytest.raises(hermes_config.HermesError):
         hermes_config.set_model(bare_home, base_url="http://x/v1", model="m", api_key="k")
+
+
+@pytest.mark.parametrize("code,field", [(401, "api_key"), (403, "api_key"), (500, "base_url"), (404, "base_url")])
+def test_refused_key_is_an_api_key_error(running, fake_hermes, code, field):
+    """A provider that answers 401 or 403 has the right address and refused the key: say so on the key."""
+    import http.server
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(code)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, *a):
+            pass
+
+    up = http.server.HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=up.serve_forever, daemon=True).start()
+    try:
+        home, port = running
+        base = f"http://127.0.0.1:{up.server_address[1]}/v1"
+        status, body = post(port, "/api/tier", {"tier": "own", "base_url": base, "model": "m", "api_key": "sk-wrong"})
+        assert status == 422 and body["field"] == field
+        if field == "api_key":
+            assert body["error"] == "the provider refused that key"
+        assert "sk-wrong" not in json.dumps(body)
+        # the private tier sends no key, so a 401 there is not about a key
+        status, body = post(port, "/api/tier", {"tier": "private", "base_url": base, "model": "m"})
+        assert status == 422 and body["field"] == "base_url"
+    finally:
+        up.shutdown()
+        up.server_close()
+    assert fake_hermes.calls() == [] and not (home.state_dir / "setup.json").exists()

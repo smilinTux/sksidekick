@@ -60,7 +60,11 @@ def _reachable(base_url: str, api_key: str | None) -> None:
         with _OPENER.open(req, timeout=5) as r:
             if not 200 <= r.status < 300:
                 raise OSError
-    except (OSError, ValueError, http.client.HTTPException, urllib.error.URLError):  # HTTPError (non-2xx, 3xx) is a URLError
+    except urllib.error.HTTPError as e:
+        if api_key and e.code in (401, 403):  # it answered, and said no to the key
+            raise FieldError("api_key", "the provider refused that key") from None
+        raise FieldError("base_url", "nothing answered at that address") from None
+    except (OSError, ValueError, http.client.HTTPException, urllib.error.URLError):  # other HTTPError (3xx) too
         raise FieldError("base_url", "nothing answered at that address") from None
 
 

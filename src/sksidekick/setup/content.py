@@ -43,6 +43,18 @@ VOICES = {"female": "en_US-amy-medium", "male": "en_US-ryan-medium"}
 # Env names read by the nctalk plugin (from its README). Task 6's image test greps the plugin for each.
 NCTALK_ENV_NAMES = ("NEXTCLOUD_TALK_SERVER_URL", "NEXTCLOUD_TALK_USERNAME", "NEXTCLOUD_TALK_APP_PASSWORD")
 NCTALK_DISABLED = "Comes with an invite to our Nextcloud"
+# Hermes answers on Telegram only to the users listed here; without it a message from the owner gets a
+# pairing prompt or nothing (the fork's gateway/run_startup.py).
+TELEGRAM_ALLOWED_USERS = "TELEGRAM_ALLOWED_USERS"
+# Fields that take digits only (a numeric id), with the error shown otherwise.
+DIGIT_FIELDS = {TELEGRAM_ALLOWED_USERS: "enter your Telegram user id, digits only"}
+# One line of help under a field, where the page needs one.
+FIELD_HELP = {
+    TELEGRAM_ALLOWED_USERS: (
+        "Only this id can talk to your sidekick on Telegram. To find yours, message @userinfobot in Telegram: "
+        "it replies with your id."
+    ),
+}
 # Field names that hold a secret: never echoed back.
 SECRET_FIELDS = frozenset({"NEXTCLOUD_TALK_APP_PASSWORD", "TELEGRAM_BOT_TOKEN"})
 
@@ -57,7 +69,7 @@ CHANNELS = (
         "id": "telegram",
         "title": "Telegram",
         "label": "Telegram also sees the conversation.",
-        "fields": ["TELEGRAM_BOT_TOKEN"],
+        "fields": ["TELEGRAM_BOT_TOKEN", TELEGRAM_ALLOWED_USERS],
     },
 )
 

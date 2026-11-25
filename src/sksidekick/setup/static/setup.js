@@ -12,7 +12,9 @@
     NEXTCLOUD_TALK_USERNAME: "User name",
     NEXTCLOUD_TALK_APP_PASSWORD: "App password",
     TELEGRAM_BOT_TOKEN: "Bot token",
+    TELEGRAM_ALLOWED_USERS: "Your Telegram user id",
   };
+  const DIGITS = { TELEGRAM_ALLOWED_USERS: true };
   const SECRET = /PASSWORD|TOKEN|KEY/;
 
   const TOKEN_KEY = "sksidekick-setup-token";
@@ -234,9 +236,14 @@
       c.fields.forEach(function (name) {
         const row = el("div", { class: "row" });
         row.appendChild(el("label", { for: "f-" + name }, FIELD_LABELS[name] || name));
-        const f = el("input", { id: "f-" + name, type: SECRET.test(name) ? "password" : "text",
-          autocomplete: "off", spellcheck: "false", "aria-describedby": "err-" + name, "data-field": name });
+        const help = c.help && c.help[name];
+        const attrs = { id: "f-" + name, type: SECRET.test(name) ? "password" : "text",
+          autocomplete: "off", spellcheck: "false", "aria-describedby": (help ? "help-" + name + " " : "") + "err-" + name,
+          "data-field": name };
+        if (DIGITS[name]) attrs.inputmode = "numeric";
+        const f = el("input", attrs);
         row.appendChild(f);
+        if (help) row.appendChild(el("p", { id: "help-" + name, class: "hint" }, help));
         const err = el("p", { id: "err-" + name, class: "error", role: "alert" });
         err.hidden = true;
         row.appendChild(err);
@@ -402,7 +409,9 @@
       forgetPhrase();
       store(OPEN_KEY, "");
       const m = $("err-phrase");
-      m.textContent = "That phrase was thrown away after too many tries. Show a new one and write it down again.";
+      m.textContent = r.body.reason === "too_many_tries"
+        ? "That phrase was thrown away after too many tries. Show a new one and write it down again."
+        : "That phrase expired (it is kept for 30 minutes, and only while setup runs). Show a new one and write it down again.";
       m.hidden = false;
       $("btn-phrase-show").textContent = "Show a new recovery phrase";
       $("btn-phrase-show").focus();
@@ -431,15 +440,43 @@
     if (kind === "rclone") body.target = $("f-rclone").value;
     const r = await send("api/backup", body, "kind");
     if (!r || !r.ok) return;
-    if (kind === "later" && st.backup_warning) {
-      $("done-warning").textContent = st.backup_warning;
+    const warning = (kind === "later" && st.backup_warning) || (r.body && r.body.warning) || "";
+    if (warning) {
+      $("done-warning").textContent = warning;
       $("done-warning").hidden = false;
     }
+    doneNext();
     st.completed = STEPS.slice();
     token = "";
     store(TOKEN_KEY, "");
     show("done"); // setup has shut down: no more requests
   });
+
+  // What to do next, by the channels chosen: with none, the command that talks to it on this computer.
+  function doneNext() {
+    const chans = (st.choices && st.choices.channels && st.choices.channels.channels) || [];
+    const lines = [];
+    if (chans.indexOf("telegram") >= 0) lines.push("Message your bot on Telegram to talk to it. It answers only the user id you gave.");
+    if (chans.indexOf("nextcloud-talk") >= 0) lines.push("Write to it in Nextcloud Talk.");
+    if (!chans.length) lines.push("You chose no channels, so you talk to it on this computer. Once it has started, run this in a terminal:");
+    $("done-next").textContent = lines.join(" ");
+    $("done-command-text").textContent = st.chat_command || "";
+    $("done-command").hidden = !!chans.length || !st.chat_command;
+  }
+
+  // Copy that depends on where setup runs: a container (its 127.0.0.1 is its own) and the computer's system.
+  function placeHints() {
+    const box = !!st.in_container;
+    // the examples sit in the page as data-placeholder-* attributes; the plain placeholder is the default
+    [$("f-base_url"), $("f-dir")].forEach(function (f) {
+      if (f.dataset.placeholderDefault === undefined) f.dataset.placeholderDefault = f.placeholder;
+      const alt = box ? f.dataset.placeholderContainer : st.platform === "mac" ? f.dataset.placeholderMac : undefined;
+      f.placeholder = alt || f.dataset.placeholderDefault;
+    });
+    $("hint-base_url").hidden = box;
+    $("hint-base_url-container").hidden = !box;
+    $("hint-dir-container").hidden = !box;
+  }
 
   // ---- wiring ----
   // A finished step shows the choice made there (ids only; secrets are never sent back).
@@ -460,6 +497,8 @@
     showChoices();
     $("backup-later-note").textContent = st.backup_warning || "";
     backupRows();
+    placeHints();
+    if (done("backup")) doneNext();
   }
 
   document.querySelectorAll(".back").forEach(function (b) { b.addEventListener("click", function () { go(-1); }); });

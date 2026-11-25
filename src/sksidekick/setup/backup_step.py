@@ -30,7 +30,20 @@ def warning(home: Home) -> str | None:
     return None if dests else backup_failed(backup.NO_DEST, None)
 
 
-def _dir(target: str) -> dict:
+INSIDE_HOME = "that folder is inside the sidekick's own home, so a backup there is lost with it; choose a folder elsewhere"
+SAME_DISK = (
+    "That folder is on the same disk as the sidekick's data inside this container, so a backup there is lost "
+    "with it. Start the container with a folder of this computer mounted, for example "
+    "-v ~/sidekick-backups:/backups, then add it with: sksidekick backup add-dir /backups"
+)
+
+
+def _inside(path: Path, root: Path) -> bool:
+    p, r = path.resolve(), root.resolve()
+    return p == r or r in p.parents
+
+
+def _dir(home: Home, target: str) -> dict:
     if _CONTROL.search(target):
         raise FieldError("target", "that folder name contains a line break or other characters it cannot hold")
     path = Path(target).expanduser()
@@ -38,6 +51,8 @@ def _dir(target: str) -> dict:
         raise FieldError("target", "enter the full path of the folder, starting with /")
     if not path.is_dir():
         raise FieldError("target", "there is no folder at that path")
+    if _inside(path, home.root):
+        raise FieldError("target", INSIDE_HOME)
     try:
         fd, probe = tempfile.mkstemp(dir=path, prefix=".sksidekick-write-test-")
         os.close(fd)
@@ -45,6 +60,16 @@ def _dir(target: str) -> dict:
     except OSError:
         raise FieldError("target", "the sidekick cannot write to that folder") from None
     return {"kind": "dir", "path": str(path)}
+
+
+def same_disk_warning(home: Home, dest: dict | None) -> str | None:
+    """In a container, a folder on the same device as the home is most likely the data volume itself."""
+    if not dest or dest["kind"] != "dir" or not state.in_container():
+        return None
+    try:
+        return SAME_DISK if os.stat(dest["path"]).st_dev == os.stat(home.root).st_dev else None
+    except OSError:
+        return None
 
 
 def _rclone(target: str) -> dict:
@@ -70,7 +95,7 @@ def handle(home: Home, body: dict) -> dict:
     kind, target = body.get("kind"), body.get("target")
     target = target.strip() if isinstance(target, str) else ""
     if kind == "dir":
-        dest = _dir(target)
+        dest = _dir(home, target)
     elif kind == "rclone":
         dest = _rclone(target)
     elif kind == "later":
@@ -94,4 +119,5 @@ def handle(home: Home, body: dict) -> dict:
     except BaseException:
         _restore(snap)
         raise
-    return {}
+    warn = same_disk_warning(home, dest)
+    return {"warning": warn} if warn else {}

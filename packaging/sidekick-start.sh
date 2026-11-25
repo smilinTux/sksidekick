@@ -26,7 +26,10 @@ said=""
 if [ ! -f "$home/state/instance.json" ] && [ "${SKSIDEKICK_SETUP:-on}" != off ]; then
     echo "No sidekick here yet. Open the setup page below in your browser; publish its port on this computer only: docker run -p 127.0.0.1:8765:8765 ...   (or run: docker exec -it <container> sksidekick init, or sksidekick import ARCHIVE --phrase-stdin)"
     said=1
-    "$bin/sksidekick" setup --host 0.0.0.0 --port "${SKSIDEKICK_SETUP_PORT:-8765}" &
+    # Only a container gets here (the plain install's service has SKSIDEKICK_SETUP=off): say so to setup,
+    # whose model and backup hints differ there. The image's Dockerfile sets it too, for docker exec.
+    SKSIDEKICK_IN_CONTAINER="${SKSIDEKICK_IN_CONTAINER:-1}" \
+        "$bin/sksidekick" setup --host 0.0.0.0 --port "${SKSIDEKICK_SETUP_PORT:-8765}" &
     setup_pid=$!
     stopping=""
     # docker stop and systemd send SIGTERM here: pass it on so setup shreds an unconfirmed key, then leave.

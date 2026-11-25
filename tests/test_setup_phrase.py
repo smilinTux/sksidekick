@@ -158,11 +158,12 @@ def test_three_misses_shreds(at_phrase_running):
         assert key_files(home)
     status, err, _, _ = post(port, "/api/phrase/confirm", wrong)
     assert status == 422
-    assert err == {"field": "groups", "error": "those groups do not match", "new_phrase_needed": True}
+    assert err == {"field": "groups", "error": "those groups do not match", "new_phrase_needed": True,
+                   "reason": "too_many_tries"}
     assert key_files(home) == []
     # even the right groups no longer count: that phrase is gone
     status, err, _, _ = post(port, "/api/phrase/confirm", confirm_body(out["phrase"], check))
-    assert status == 422 and err.get("new_phrase_needed") is True
+    assert status == 422 and err.get("new_phrase_needed") is True and err["reason"] == "too_many_tries"
     assert post(port, "/api/phrase/new")[0] == 200 and key_files(home)
 
 
@@ -173,7 +174,7 @@ def test_timeout_shreds(at_phrase_running, monkeypatch):
     assert key_files(home)
     assert wait_for(lambda: key_files(home) == [])
     status, err, _, _ = post(port, "/api/phrase/confirm", confirm_body(out["phrase"], out["check"]))
-    assert status == 422 and err.get("new_phrase_needed") is True
+    assert status == 422 and err.get("new_phrase_needed") is True and err["reason"] == "expired"
 
 
 def test_timer_never_touches_confirmed_keys(at_phrase_running, monkeypatch):
@@ -412,3 +413,47 @@ def test_signals_ignored_during_stop_shred_and_restored(bare_home, monkeypatch):
     assert all(seen["installed"][s] is server._raise_stopped for s in sigs)
     assert all(seen[s] == signal.SIG_IGN for s in sigs)
     assert {s: signal.getsignal(s) for s in sigs} == before
+
+
+def test_backup_dir_inside_the_home_refused(at_phrase_running, tmp_path):
+    """A backup inside the sidekick's own home dies with it: refused everywhere, also through a link."""
+    home, port = at_phrase_running
+    confirmed(home, port)
+    (home.root / "backups").mkdir(parents=True)
+    link = tmp_path / "looks-elsewhere"
+    link.symlink_to(home.root / "backups")
+    for target in (str(home.root), str(home.root / "backups"), str(home.root / "backups" / ".." / "backups"), str(link)):
+        status, err, _, _ = post(port, "/api/backup", {"kind": "dir", "target": target})
+        assert status == 422 and err["field"] == "target", target
+        assert err["error"] == backup_step.INSIDE_HOME
+    assert backup.load_config(home)["destinations"] == []
+    assert state.load(home)["next"] == "backup"
+
+
+@pytest.mark.parametrize("container", [True, False])
+def test_backup_on_the_same_disk_in_a_container_warns(at_phrase_running, tmp_path, monkeypatch, container):
+    home, port = at_phrase_running
+    if container:
+        monkeypatch.setenv("SKSIDEKICK_IN_CONTAINER", "1")
+    confirmed(home, port)
+    dest = tmp_path / "backups"  # beside the home, so on the same device
+    dest.mkdir()
+    status, body, _, _ = post(port, "/api/backup", {"kind": "dir", "target": str(dest)})
+    assert status == 200
+    assert body == ({"warning": backup_step.SAME_DISK} if container else {})
+    assert backup.load_config(home)["destinations"] == [{"kind": "dir", "path": str(dest)}]
+
+
+def test_same_disk_warning_only_for_the_same_device(bare_home, tmp_path, monkeypatch):
+    monkeypatch.setenv("SKSIDEKICK_IN_CONTAINER", "1")
+    bare_home.root.mkdir(parents=True)
+    real = os.stat
+
+    class St:
+        def __init__(self, dev):
+            self.st_dev = dev
+
+    monkeypatch.setattr(os, "stat", lambda p, *a, **k: St(2) if str(p) == "/mnt/elsewhere" else real(p, *a, **k))
+    assert backup_step.same_disk_warning(bare_home, {"kind": "dir", "path": "/mnt/elsewhere"}) is None
+    assert backup_step.same_disk_warning(bare_home, {"kind": "rclone", "remote": "x:y"}) is None
+    assert backup_step.same_disk_warning(bare_home, None) is None

@@ -32,7 +32,8 @@
 
 <section id="s-lost" class="screen" aria-labelledby="h-lost" hidden>
   <h2 id="h-lost" tabindex="-1">This page needs its setup key</h2>
-  <p>For safety the key is kept only while the page is open, so a reload loses it.
+  <p>For safety the key is kept only in the browser tab that opened the setup address, so a new tab or
+     window does not have it, and each start of setup makes a new key.
      Open the address that setup printed again: it is in the terminal where setup started,
      or in <code>docker logs</code> for a container. It ends with <code>?t=</code> and the key.</p>
 </section>
@@ -54,8 +55,13 @@
       <div id="row-base_url" class="row" hidden>
         <label for="f-base_url">Model address</label>
         <input id="f-base_url" name="base_url" type="url" autocomplete="off" spellcheck="false"
-               placeholder="http://127.0.0.1:11434/v1" aria-describedby="hint-base_url err-base_url">
+               placeholder="http://127.0.0.1:11434/v1" data-placeholder-container="http://host.docker.internal:11434/v1"
+               aria-describedby="hint-base_url hint-base_url-container err-base_url">
         <p id="hint-base_url" class="hint">An OpenAI compatible address. For Ollama on this computer it is usually the example shown.</p>
+        <p id="hint-base_url-container" class="hint" hidden>Setup runs in a container here, where 127.0.0.1 is the container
+           itself. For Ollama on this computer use the example shown, and start Ollama with
+           <code>OLLAMA_HOST=0.0.0.0</code> so it listens beyond loopback (your firewall then decides who else
+           reaches it). On Linux, start the container with <code>--add-host=host.docker.internal:host-gateway</code>.</p>
         <p id="err-base_url" class="error" role="alert" hidden></p>
       </div>
       <div id="row-model" class="row" hidden>
@@ -176,8 +182,12 @@
         <label class="choice"><input id="kind-dir" type="radio" name="kind" value="dir"> A folder (on this computer or a drive)</label>
         <div id="row-dir" class="row sub" hidden>
           <label for="f-dir">Full path of the folder</label>
-          <input id="f-dir" type="text" autocomplete="off" spellcheck="false" placeholder="/media/usb/sidekick" aria-describedby="hint-dir err-target">
-          <p id="hint-dir" class="hint">In a container, use a folder inside it, for example one under /opt/data.</p>
+          <input id="f-dir" type="text" autocomplete="off" spellcheck="false" placeholder="/media/usb/sidekick"
+                 data-placeholder-mac="/Volumes/USB/sidekick" data-placeholder-container="/backups" aria-describedby="hint-dir hint-dir-container err-target">
+          <p id="hint-dir" class="hint">A folder outside the sidekick's own home, best on another drive.</p>
+          <p id="hint-dir-container" class="hint" hidden>Setup runs in a container here, and a folder inside it is lost
+             with the container's data. Start the container with a folder of this computer mounted, for example
+             <code>-v ~/sidekick-backups:/backups</code>, and enter <code>/backups</code>.</p>
         </div>
         <label class="choice"><input id="kind-rclone" type="radio" name="kind" value="rclone"> An rclone remote</label>
         <div id="row-rclone" class="row sub" hidden>
@@ -200,6 +210,8 @@
 <section id="s-done" class="screen" aria-labelledby="h-done" hidden>
   <h2 id="h-done" tabindex="-1">Your sidekick is set up</h2>
   <p>It starts on its own now. Setup has closed, so you can close this tab.</p>
+  <p id="done-next"></p>
+  <p id="done-command" hidden><code id="done-command-text"></code></p>
   <p id="done-warning" class="important" hidden></p>
 </section>
 </main>

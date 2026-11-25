@@ -9,6 +9,13 @@ from pathlib import Path
 from sksidekick.home import Home
 
 Steps = ("tier", "channels", "personality", "phrase", "backup", "done")
+# Set to 1 by the image (packaging/Dockerfile, sidekick-start): setup runs inside a container, so its
+# 127.0.0.1 is the container's and a folder under the data volume dies with it.
+IN_CONTAINER_ENV = "SKSIDEKICK_IN_CONTAINER"
+
+
+def in_container() -> bool:
+    return os.environ.get(IN_CONTAINER_ENV) == "1"
 
 
 class OutOfOrder(Exception):
@@ -71,11 +78,14 @@ def advance(home: Home, step: str, choice: dict | None = None) -> None:
         data["choices"] = {**dict(data.get("choices", {})), step: choice}
     home.state_dir.mkdir(parents=True, exist_ok=True)
     tmp = _path(home).with_suffix(".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write(json.dumps(data))
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, _path(home))
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps(data))
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, _path(home))
+    finally:
+        tmp.unlink(missing_ok=True)  # gone already after the replace; a failed write leaves nothing
 
 
 def ensure_hermes_dir(home: Home) -> Path:

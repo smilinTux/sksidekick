@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from sksidekick.home import Home
@@ -112,3 +114,29 @@ def test_sqlite_shm_is_not_story(bare_home: Home):
     # mid-export on 2026-11-25. The database and its -wal stay story.
     _touch(bare_home, "hermes/response_store.db", "hermes/response_store.db-wal", "hermes/response_store.db-shm")
     assert [str(p) for p in bare_home.story_paths()] == ["hermes/response_store.db", "hermes/response_store.db-wal"]
+
+
+def test_tmp_files_are_not_story(bare_home: Home):
+    # a failed atomic write leaves <name>.tmp; hermes/.env.tmp would carry credentials past the .env redactor
+    _touch(bare_home, "hermes/.env", "hermes/.env.tmp", "hermes/config.yaml.tmp", "soul/personality.json.TMP")
+    assert [str(p) for p in bare_home.story_paths()] == ["hermes/.env"]
+
+
+def test_failed_writes_leave_no_tmp(bare_home: Home, monkeypatch):
+    import pytest
+
+    from sksidekick.setup import hermes_config, state
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(os, "replace", boom)
+    bare_home.root.mkdir(parents=True)
+    for write in (lambda: hermes_config.set_envs(bare_home, {"TELEGRAM_BOT_TOKEN": "1:secret"}),
+                  lambda: hermes_config.write_private(bare_home.root / "x.json", b"{}"),
+                  lambda: state.advance(bare_home, "tier"),
+                  bare_home.new_instance):
+        with pytest.raises(OSError):
+            write()
+    left = [p for p in bare_home.root.rglob("*") if p.name.endswith(".tmp")]
+    assert left == []

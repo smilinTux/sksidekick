@@ -36,9 +36,13 @@ def story_home(bare_home: Home) -> Home:
 
 
 @pytest.fixture(autouse=True)
-def _no_host_hermes(monkeypatch):
-    """A developer's own HERMES_HOME must never leak into a test."""
-    monkeypatch.delenv("HERMES_HOME", raising=False)
+def _no_host_hermes(monkeypatch, tmp_path):
+    """A developer's own HERMES_HOME (or a container's settings, or a bundled nctalk) must never leak into a test."""
+    from sksidekick.setup import channels
+
+    for name in ("HERMES_HOME", "SKSIDEKICK_IN_CONTAINER", "SKSIDEKICK_NCTALK_DIR", "HERMES_BUNDLED_PLUGINS"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(channels, "BUNDLED_PLUGINS", tmp_path / "no-bundled-plugins")
 
 
 class FakeHermes:

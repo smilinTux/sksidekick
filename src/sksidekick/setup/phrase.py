@@ -55,6 +55,7 @@ class _Pending:
 _PENDING: dict[str, _Pending] = {}  # str(home.root) -> the phrase waiting for its confirm
 _STOPPED: set[str] = set()  # homes whose server has stopped: no new keys after the stop shred
 _CREATED: dict[str, str] = {}  # str(home.root) -> sha256 of the wrapped key phrase/new wrote in this process
+_GONE: dict[str, str] = {}  # str(home.root) -> why the last phrase was thrown away: "expired" or "too_many_tries"
 
 
 def _confirmed(home: Home) -> bool:
@@ -95,6 +96,7 @@ def _expire(home: Home, pending: _Pending) -> None:
     with _LOCK:
         if _PENDING.get(str(home.root)) is pending:
             _shred_unconfirmed(home)
+            _GONE[str(home.root)] = "expired"
 
 
 def _norm_group(text: object) -> str:
@@ -109,6 +111,7 @@ def new(home: Home, body: dict) -> dict:
         if str(home.root) in _STOPPED:
             raise state.Conflict("setup is stopping; start it again")
         _shred_unconfirmed(home)  # a refresh: the old phrase is gone for good
+        _GONE.pop(str(home.root), None)
         if home.keys_dir.is_dir() and any(home.keys_dir.iterdir()):
             raise state.Conflict("this sidekick already has keys (made by sksidekick init or import)")
         try:
@@ -131,8 +134,9 @@ def confirm(home: Home, body: dict) -> dict:
     typed = body.get("groups")
     with _LOCK:
         pending = _PENDING.get(str(home.root))
-        if pending is None:
-            raise FieldError("groups", MISMATCH, {"new_phrase_needed": True})
+        if pending is None:  # timed out, thrown away after misses, or setup restarted since it was shown
+            reason = _GONE.get(str(home.root), "expired")
+            raise FieldError("groups", MISMATCH, {"new_phrase_needed": True, "reason": reason})
         ok = isinstance(typed, dict) and set(typed) == {str(i) for i in pending.check}
         for i in pending.check:  # compare both groups, whatever the first one gave
             got = _norm_group(typed.get(str(i)) if isinstance(typed, dict) else None)
@@ -141,7 +145,8 @@ def confirm(home: Home, body: dict) -> dict:
             pending.misses += 1
             if pending.misses >= MAX_MISSES:
                 _shred_unconfirmed(home)
-                raise FieldError("groups", MISMATCH, {"new_phrase_needed": True})
+                _GONE[str(home.root)] = "too_many_tries"
+                raise FieldError("groups", MISMATCH, {"new_phrase_needed": True, "reason": "too_many_tries"})
             raise FieldError("groups", MISMATCH)
         _drop(home)
         state.advance(home, "phrase")  # under _LOCK, so the timer cannot shred in between
@@ -161,6 +166,7 @@ def on_start(home: Home) -> None:
         _STOPPED.discard(str(home.root))
         _drop(home)
         _CREATED.pop(str(home.root), None)
+        _GONE.pop(str(home.root), None)
         dead_setup = (home.state_dir / "setup.json").exists() and not (home.state_dir / "instance.json").exists()
         if dead_setup and not _confirmed(home):
             keys.shred_keys(home)

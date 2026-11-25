@@ -26,7 +26,7 @@ def test_page_files_exist():
 
 def test_page_has_no_external_urls():
     for f in _text_files():
-        text = re.sub(r'placeholder="[^"]*"', "", f.read_text())  # the user's own input hints
+        text = re.sub(r'placeholder(-[a-z]+)?="[^"]*"', "", f.read_text())  # the user's own input hints
         assert "http://" not in text and "https://" not in text, f.name
         assert not re.search(r"(src|href)\s*=\s*[\"']//", text), f.name
         assert "@import" not in text and "url(" not in text, f.name

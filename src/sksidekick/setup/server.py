@@ -8,6 +8,8 @@ from __future__ import annotations
 import hmac
 import json
 import secrets
+import shlex
+import shutil
 import signal
 import sys
 import threading
@@ -42,6 +44,20 @@ CHOICES = {
 }
 
 _LOCK = threading.Lock()
+
+
+def chat_command(home: Home) -> str:
+    """How to talk to the sidekick on this computer once it runs (the done screen, when no channel was chosen)."""
+    if state.in_container():
+        return "docker exec -it -u hermes <container> sidekick-hermes chat"
+    hermes = shutil.which("hermes") or "hermes"  # the plain install's wrapper puts its own bin first on PATH
+    return f"HERMES_HOME={shlex.quote(str(home.hermes_dir))} {shlex.quote(hermes)} chat"
+
+
+def where(home: Home) -> dict:
+    """Where setup runs, for copy that depends on it: a container (127.0.0.1 is its own), and mac or linux."""
+    return {"in_container": state.in_container(), "platform": "mac" if sys.platform == "darwin" else "linux",
+            "chat_command": chat_command(home)}
 
 
 def _same(a: str, b: str) -> bool:
@@ -138,8 +154,9 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._json(403, {"error": "forbidden"})
             extra = {"Set-Cookie": f"{COOKIE}={self.server.token}; HttpOnly; SameSite=Strict; Path=/"}
         if url.path == "/api/state":
-            out = {**state.load(self.server.home), "tiers": tier.tiers_state(), "channels": channels.channels_state(self.server.home), **soul.personality_state(),
-                   "backup_warning": backup_step.warning(self.server.home)}
+            home = self.server.home
+            out = {**state.load(home), "tiers": tier.tiers_state(), "channels": channels.channels_state(home), **soul.personality_state(),
+                   "backup_warning": backup_step.warning(home), **where(home)}
             return self._send(200, json.dumps(out).encode(), "application/json", extra)
         rel = "index.html" if url.path == "/" else url.path[len("/static/"):] if url.path.startswith("/static/") else None
         f = (STATIC / rel).resolve() if rel else None
