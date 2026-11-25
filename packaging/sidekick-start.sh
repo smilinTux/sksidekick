@@ -1,5 +1,6 @@
 #!/bin/sh
-# Container command (and the plain install's service). Waits for a sidekick (init or import), gives it its own Hermes home inside the
+# Container command (and the plain install's service). On first run it starts the setup page; otherwise
+# waits for a sidekick (setup, init or import), gives it its own Hermes home inside the
 # sidekick home, then runs `sksidekick serve`. A copy that is not live idles instead of exiting, so a
 # restart policy never turns a moved-out copy into a crash loop.
 set -eu
@@ -7,6 +8,32 @@ home="${SKSIDEKICK_HOME:?}"
 seed="${SIDEKICK_SEED:-/opt/data}"      # where Hermes' installer or boot hook seeded config.yaml, .env and SOUL.md
 bin="${SIDEKICK_BIN:-/opt/sksidekick/bin}"  # sksidekick's own venv
 said=""
+
+# First run: the setup page (unless SKSIDEKICK_SETUP=off, as in the plain install's service, where
+# install.sh runs setup itself). It binds every address inside the container; the image publishes the
+# port on the host's loopback only. It exits 0 when setup finishes, or when `sksidekick init` / `import`
+# makes the sidekick another way; then the loop below sees instance.json and serve starts. It refuses
+# (non-zero) a home that is already set up, and then the wait loop below says what to do.
+if [ ! -f "$home/state/instance.json" ] && [ "${SKSIDEKICK_SETUP:-on}" != off ]; then
+    echo "No sidekick here yet. Open the setup page below in your browser; publish its port on this computer only: docker run -p 127.0.0.1:8765:8765 ...   (or run: docker exec -it <container> sksidekick init, or sksidekick import ARCHIVE --phrase-stdin)"
+    said=1
+    "$bin/sksidekick" setup --host 0.0.0.0 --port "${SKSIDEKICK_SETUP_PORT:-8765}" &
+    setup_pid=$!
+    stopping=""
+    # docker stop and systemd send SIGTERM here: pass it on so setup shreds an unconfirmed key, then leave.
+    trap 'stopping=1; kill -TERM "$setup_pid" 2>/dev/null || true' TERM HUP INT
+    setup_code=0
+    while :; do
+        wait "$setup_pid" && setup_code=0 || setup_code=$?
+        kill -0 "$setup_pid" 2>/dev/null || break  # a trap only interrupted the wait: wait again
+    done
+    trap - TERM HUP INT
+    [ -z "$stopping" ] || exit 143
+    if [ "$setup_code" != 0 ]; then
+        said=""
+    fi
+fi
+
 while [ ! -f "$home/state/instance.json" ]; do
     if [ -z "$said" ]; then
         echo "No sidekick here yet. Run: docker exec -it <container> sksidekick init   (or sksidekick import ARCHIVE --phrase-stdin)"

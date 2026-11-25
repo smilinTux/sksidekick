@@ -5,6 +5,7 @@ After=network-online.target
 [Service]
 ExecStart=@APP@/bin/sidekick-start
 Environment="SKSIDEKICK_HOME=@HOME@"
+Environment="SKSIDEKICK_SETUP=off"
 Environment="SIDEKICK_SEED=@APP@/hermes-seed"
 Environment="SIDEKICK_BIN=@APP@/sksidekick/bin"
 Environment="SIDEKICK_SKMEMORY_JSON=@APP@/skmemory.json"

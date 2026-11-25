@@ -41,6 +41,9 @@ COPY --chmod=0755 packaging/sidekick-start.sh /usr/local/bin/sidekick-start
 COPY --chmod=0644 packaging/skmemory.json /opt/sksidekick/skmemory.json
 
 ENV SKSIDEKICK_HOME=/opt/data/sidekick
+# The first-run setup page (sidekick-start runs it until setup is done). Publish it on the host's
+# loopback only: docker run -p 127.0.0.1:8765:8765 ...
+EXPOSE 8765
 # serve supervises the gateway; never let a bare `gateway run` move it under the fork's s6 profile-gateways.
 ENV HERMES_GATEWAY_NO_SUPERVISE=1
 CMD ["sidekick-start"]

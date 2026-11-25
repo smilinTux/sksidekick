@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Plain sksidekick install for macOS and Linux (no container):
-#   install.sh [--home PATH] [--no-init] [--uninstall] [--force-hermes-link]
+#   install.sh [--home PATH] [--no-init | --init | --setup-headless] [--uninstall] [--force-hermes-link]
+#   default: start the setup page and open it in your browser (the recovery phrase is shown there, once).
+#   --setup-headless: print the setup page's address instead of opening a browser.
+#   --init: no page; create the sidekick in this terminal (`sksidekick init`, phrase printed here).
 #   --no-init: leave the home empty for `sksidekick import` (moving here); the service waits for it.
 # Code goes in the app folder; the sidekick's data (its home) goes elsewhere and is never removed here.
 set -eu
@@ -28,13 +31,16 @@ esac
 uninstall=""
 force_link=""
 no_init=""
+mode="browser"
 while [ $# -gt 0 ]; do
     case "$1" in
         --home) [ $# -ge 2 ] || die "--home needs a path"; home="$2"; shift 2 ;;
         --uninstall) uninstall=1; shift ;;
         --no-init) no_init=1; shift ;;
+        --init) mode="init"; shift ;;
+        --setup-headless) mode="headless"; shift ;;
         --force-hermes-link) force_link=1; shift ;;
-        -h|--help) sed -n 2,5p "$0"; exit 0 ;;
+        -h|--help) sed -n 2,9p "$0"; exit 0 ;;
         *) die "unknown option: $1" ;;
     esac
 done
@@ -113,11 +119,14 @@ ln -sf "$app/bin/sksidekick" "$HOME/.local/bin/sksidekick"
 
 if [ -n "$no_init" ]; then
     say "No sidekick created. Import yours: sksidekick --home \"$home\" import ARCHIVE --phrase-stdin"
-elif [ ! -f "$home/state/instance.json" ]; then
+elif [ "$mode" = init ] && [ ! -f "$home/state/instance.json" ]; then
     say "Creating your sidekick in $home"
     "$app/bin/sksidekick" --home "$home" init
 fi
 
+# The service runs with SKSIDEKICK_SETUP=off: setup is started below, in this terminal, never by the
+# service too (one setup server, one port). The service's start script waits for instance.json, so it
+# only starts serving once setup (or init, or import) has made the sidekick.
 render() { sed -e "s|@APP@|$app|g" -e "s|@HOME@|$home|g" "$1"; }
 say "Service"
 if [ "$(uname -s)" = Darwin ]; then
@@ -131,5 +140,33 @@ else
     systemctl --user daemon-reload
     systemctl --user enable --now sksidekick.service
 fi
+
+open_url() {  # the address is always printed; a browser is opened when there is one to open
+    echo "Setup page (open it in a browser on this computer): $1"
+    [ "$mode" = headless ] && return 0
+    if [ "$(uname -s)" = Darwin ]; then
+        open "$1" >/dev/null 2>&1 || true
+    elif [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v xdg-open >/dev/null; then
+        xdg-open "$1" >/dev/null 2>&1 || true
+    fi
+}
+
+if [ -z "$no_init" ] && [ "$mode" != init ] && [ ! -f "$home/state/instance.json" ]; then
+    say "Setup page: choose the model, channels and personality, and write down your recovery phrase"
+    echo "Setup runs here until you finish it in the browser. Ctrl-C stops it; start it again with:"
+    echo "    sksidekick --home \"$home\" setup"
+    set +e
+    # PATH: setup writes the model choice with this install's own hermes.
+    PATH="$app/bin:$PATH" "$app/bin/sksidekick" --home "$home" setup | while IFS= read -r line; do
+        case "$line" in
+            "Open http"*) open_url "${line#Open }" ;;
+            *) printf '%s\n' "$line" ;;
+        esac
+    done
+    rc="${PIPESTATUS[0]}"
+    set -e
+    [ "$rc" = 0 ] || die "setup did not finish (exit $rc); start it again: sksidekick --home \"$home\" setup"
+fi
+
 echo "Done. Your sidekick's home: $home"
 echo "Check it any time with: sksidekick --home \"$home\" status"
