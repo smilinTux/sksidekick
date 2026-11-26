@@ -79,9 +79,12 @@ def test_ownership_loss_refused_and_original_untouched(tmp_path, monkeypatch):
     registry.upsert(p, cred())
     before = p.read_bytes()
     real = os.fstat
+    state = {"on": False}
 
     def other_owner(fd):
         st = real(fd)
+        if not state["on"]:
+            return st
         return types.SimpleNamespace(st_uid=st.st_uid + 1, st_gid=st.st_gid)
 
     def denied(*a):
@@ -89,7 +92,11 @@ def test_ownership_loss_refused_and_original_untouched(tmp_path, monkeypatch):
 
     monkeypatch.setattr(os, "fchown", denied)
     monkeypatch.setattr(registry.os, "fstat", other_owner)
-    with pytest.raises(registry.RegistryError, match="run this as the gateway user"):
-        registry.upsert(p, cred(token="t2"))
+    state["on"] = True
+    try:
+        with pytest.raises(registry.RegistryError, match="run this as the gateway user"):
+            registry.upsert(p, cred(token="t2"))
+    finally:
+        state["on"] = False
     assert p.read_bytes() == before
     assert not list(tmp_path.glob(".clients.json.*"))
