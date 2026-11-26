@@ -70,3 +70,26 @@ def test_revoke_unknown_client_and_corrupt_file(tmp_path):
     p.write_text("{not json")
     with pytest.raises(registry.RegistryError):
         registry.upsert(p, cred(token="z"))
+
+
+def test_ownership_loss_refused_and_original_untouched(tmp_path, monkeypatch):
+    import types
+
+    p = tmp_path / "clients.json"
+    registry.upsert(p, cred())
+    before = p.read_bytes()
+    real = os.fstat
+
+    def other_owner(fd):
+        st = real(fd)
+        return types.SimpleNamespace(st_uid=st.st_uid + 1, st_gid=st.st_gid)
+
+    def denied(*a):
+        raise PermissionError
+
+    monkeypatch.setattr(os, "fchown", denied)
+    monkeypatch.setattr(registry.os, "fstat", other_owner)
+    with pytest.raises(registry.RegistryError, match="run this as the gateway user"):
+        registry.upsert(p, cred(token="t2"))
+    assert p.read_bytes() == before
+    assert not list(tmp_path.glob(".clients.json.*"))

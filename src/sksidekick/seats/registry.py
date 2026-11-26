@@ -60,7 +60,11 @@ def write_atomic(path: Path, data: bytes, default_mode: int = 0o600) -> None:
                 try:
                     os.fchown(f.fileno(), *owner)
                 except PermissionError:
-                    pass  # not root: the file is ours already, or we cannot change it anyway
+                    pass  # fine when the file is already ours; checked right below
+                got = os.fstat(f.fileno())
+                if (got.st_uid, got.st_gid) != owner:
+                    raise RegistryError(
+                        "cannot keep the registry's owner or group; run this as the gateway user")
             f.write(data)
             f.flush()
             os.fsync(f.fileno())

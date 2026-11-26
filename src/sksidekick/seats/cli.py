@@ -173,6 +173,8 @@ def _cmd_usage(a) -> int:
         doc = json.loads(Path(a.json).read_text())
     except (OSError, json.JSONDecodeError) as e:
         raise SeatError(f"cannot read {a.json}: {e}") from None
+    print("Attribution is only trustworthy on a sidekick gateway that meters by the verified client id "
+          "(client auth on).", file=sys.stderr)
     totals: dict[str, dict] = {}
     rows = (doc.get("spend") or {}).get("rows")
     if rows:

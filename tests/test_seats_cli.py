@@ -155,7 +155,9 @@ def test_list_and_usage_map_owner(tmp_path, capsys):
     u = tmp_path / "usage.json"
     u.write_text(json.dumps(usage))
     assert main(base(tmp_path) + ["usage", "--json", str(u)]) == 0
-    out = capsys.readouterr().out
+    cap = capsys.readouterr()
+    out = cap.out
+    assert "Attribution is only trustworthy on a sidekick gateway that meters by the verified client id (client auth on)." in cap.err
     assert f"{inv.client_id}  Test Person  calls=4 tokens=17 dollars=0.3000" in out
     assert "someone-else  (not a seat)" in out
 
