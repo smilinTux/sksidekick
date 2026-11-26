@@ -17,13 +17,14 @@ _BAD = "\n\r\0"
 
 def tiers_state(home: Home) -> dict:
     """What the page needs to draw the three options. The gateway token is never included."""
-    inv = seat.load(home)
+    inv = seat.current(home)
     out = {t["id"]: dict(t) for t in content.TIERS}
-    out["shared"]["enabled"] = inv is not None
-    if inv is not None:
+    ok = inv is not None and not seat.expired(inv)
+    out["shared"]["enabled"] = ok
+    if ok:
         out["shared"]["host"] = urlsplit(inv.gateway_url).hostname or ""
     else:
-        out["shared"]["disabled_label"] = content.SHARED_DISABLED
+        out["shared"]["disabled_label"] = REVOKED if inv is not None else content.SHARED_DISABLED
     return out
 
 
@@ -91,7 +92,7 @@ def handle(home: Home, body: dict) -> dict:
     if tier not in {t["id"] for t in content.TIERS}:
         raise FieldError("tier", "choose one of the three options")
     if tier == "shared":
-        inv = seat.load(home)
+        inv = seat.current(home)
         if inv is None:
             raise FieldError("tier", content.SHARED_DISABLED)
         model = _text(body, "model") or DEFAULT_SHARED_MODEL
@@ -100,8 +101,11 @@ def handle(home: Home, body: dict) -> dict:
         _gateway_reachable(inv)
         try:
             hermes_config.set_gateway(home, inv, model)
-        except (hermes_config.HermesError, ValueError):
+            if seat.load(home) is None:
+                seat.write_record(home, inv)
+        except (hermes_config.HermesError, ValueError, OSError):
             raise FieldError("model", "the sidekick could not save this setting") from None
+        seat.used(home)
         return {}
     else:
         base_url, model = _text(body, "base_url"), _text(body, "model")

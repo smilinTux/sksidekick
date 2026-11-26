@@ -7,6 +7,8 @@ sidekick. The token lives only in Hermes' ``.env``, which a default export redac
 from __future__ import annotations
 
 import json
+import os
+import sys
 from dataclasses import asdict
 from datetime import datetime, timezone
 
@@ -43,13 +45,49 @@ def load(home: Home) -> Invite | None:
         return None
 
 
+def write_record(home: Home, invite: Invite) -> None:
+    rec = {k: v for k, v in asdict(invite).items() if k != "token"}
+    home.root.mkdir(parents=True, exist_ok=True)
+    hermes_config.write_private(home.root / FILE, (json.dumps(rec, indent=2) + "\n").encode())
+
+
 def install(home: Home, invite: Invite) -> None:
     """Token to hermes/.env (0600), the rest to seat.json (0600). The token is written first: a record
     without a token is ignored by load()."""
     hermes_config.set_env(home, TOKEN_VAR, invite.token)
-    rec = {k: v for k, v in asdict(invite).items() if k != "token"}
-    home.root.mkdir(parents=True, exist_ok=True)
-    hermes_config.write_private(home.root / FILE, (json.dumps(rec, indent=2) + "\n").encode())
+    write_record(home, invite)
+
+
+# An invite given at setup start stays OUTSIDE the home (so init and import still accept it) until the
+# shared tier is saved. Keyed by home root; held in memory only.
+_PENDING: dict[str, tuple[Invite, str, bool]] = {}
+
+
+def stage(home: Home, invite: Invite, path: str, keep: bool) -> None:
+    _PENDING[str(home.root)] = (invite, path, keep)
+
+
+def pending(home: Home) -> tuple[Invite, str, bool] | None:
+    return _PENDING.get(str(home.root))
+
+
+def current(home: Home) -> Invite | None:
+    """The installed seat, else the staged invite."""
+    inv = load(home)
+    if inv is not None:
+        return inv
+    p = pending(home)
+    return p[0] if p else None
+
+
+def used(home: Home) -> None:
+    """The staged invite was saved: forget it and delete its file unless --keep-invite."""
+    p = _PENDING.pop(str(home.root), None)
+    if p and not p[2]:
+        try:
+            os.unlink(p[1])
+        except OSError:
+            print(f"the invite was installed but {p[1]} could not be removed; delete it", file=sys.stderr)
 
 
 def expired(invite: Invite) -> bool:

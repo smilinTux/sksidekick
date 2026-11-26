@@ -53,6 +53,8 @@ def _what(home: Home) -> list[str]:
         out.append("the model, channel and voice settings (hermes/)")
     if (home.soul_dir / "personality.json").exists():
         out.append("the personality choice")
+    if (home.root / "seat.json").exists():
+        out.append("the gateway seat (you will need a new invite to use the shared gateway again)")
     return out
 
 
@@ -98,6 +100,7 @@ def start_over(home: Home, yes: bool = False, ask: Callable[[str], str] = input)
         elif home.hermes_dir.exists():
             shutil.rmtree(home.hermes_dir)
         (home.soul_dir / "personality.json").unlink(missing_ok=True)
+        (home.root / "seat.json").unlink(missing_ok=True)  # its token went with hermes/
     finally:
         os.close(fd)
     if home.is_empty():

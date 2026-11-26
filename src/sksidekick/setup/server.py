@@ -280,23 +280,49 @@ def _shown_host(host: str) -> str:
     return "127.0.0.1" if host in ("", "0.0.0.0", "::") else host
 
 
-def main_setup(home: Home, host: str = "127.0.0.1", port: int = 8765) -> int:
+def _stage_invite(home: Home, path: str, keep: bool) -> None:
+    """Read and check the operator's invite; nothing is written to the home until the shared tier is saved.
+    A missing or bad file is one plain line (never its contents), the file stays, and setup goes on without it."""
+    from sksidekick.seats.record import Invite
+    from sksidekick.setup import seat
+
+    try:
+        invite = Invite.from_json(Path(path).read_text())
+    except OSError:
+        print(f"could not read the invite file {path}; setup starts without a seat", file=sys.stderr)
+        return
+    except ValueError as e:
+        print(f"the invite file {path} was not used ({e}); setup starts without a seat", file=sys.stderr)
+        return
+    if seat.expired(invite):
+        print(f"the invite file {path} was not used ({tier.REVOKED}); it was left in place", file=sys.stderr)
+    seat.stage(home, invite, path, keep)
+
+
+def main_setup(home: Home, host: str = "127.0.0.1", port: int = 8765, invite: str | None = None,
+               keep_invite: bool = False) -> int:
     inst = home.state_dir / "instance.json"
     setup = home.state_dir / "setup.json"
     if (inst.exists() and not setup.exists()) or (setup.exists() and state.is_complete(home)):
         print(f"{home.root} is already set up", file=sys.stderr)
+        if invite:
+            print("an invite was given, but this sidekick is already set up; the invite was not used", file=sys.stderr)
         return 1
     # Held (shared) while this server runs: `setup --start-over` needs the home to itself.
     try:
         lock = start_over.hold(home, exclusive=False)
     except start_over.NoLock as e:  # setup still works; only the guard against a start-over is missing
         print(f"{e.strerror}; setup runs without the lock that keeps setup --start-over away", file=sys.stderr)
+        if invite:
+            _stage_invite(home, invite, keep_invite)
         return _run(home, host, port)
     if lock is None:
         print(f"{home.root} is being started over (sksidekick setup --start-over); run setup when it has finished",
               file=sys.stderr)
         return 1
     try:
+        if invite:
+            _stage_invite(home, invite, keep_invite)
         return _run(home, host, port)
     finally:
         os.close(lock)

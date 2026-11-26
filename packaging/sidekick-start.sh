@@ -28,8 +28,8 @@ if [ ! -f "$home/state/instance.json" ] && [ "${SKSIDEKICK_SETUP:-on}" != off ];
     said=1
     # Only a container gets here (the plain install's service has SKSIDEKICK_SETUP=off): say so to setup,
     # whose model and backup hints differ there. The image's Dockerfile sets it too, for docker exec.
-    # SKSIDEKICK_INVITE: a path to an invite file mounted into the container (setup deletes it once installed, or
-    # warns when it cannot, as on a read-only mount). A missing or bad file is one line in this log and setup starts without a seat.
+    # SKSIDEKICK_INVITE: a path to an invite file mounted into the container. Setup only reads it at start;
+    # it is installed and deleted when the shared option is saved (init and import still work before that). A missing or bad file is one line in this log.
     invite_args=""
     [ -z "${SKSIDEKICK_INVITE:-}" ] || invite_args=1
     SKSIDEKICK_IN_CONTAINER="${SKSIDEKICK_IN_CONTAINER:-1}" \

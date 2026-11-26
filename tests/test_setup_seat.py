@@ -105,46 +105,117 @@ def _cli(tmp_path, invite_path, *extra):
     return cli.main(["--home", str(tmp_path / "h"), "setup", "--invite", str(invite_path), *extra])
 
 
-def test_invite_file_removed_after_install(tmp_path, fake_hermes, monkeypatch):
+@pytest.fixture
+def no_server(monkeypatch):
     from sksidekick.setup import server
 
-    monkeypatch.setattr(server, "main_setup", lambda *a, **k: 0)
+    ran = []
+    monkeypatch.setattr(server, "_run", lambda *a, **k: ran.append(1) or 0)
+    return ran
+
+
+def _invite_file(tmp_path, **kw):
     f = tmp_path / "invite.json"
-    f.write_text(make_invite().to_json())
+    f.write_text(make_invite(**kw).to_json())
+    return f
+
+
+def test_invite_at_start_writes_nothing_to_the_home(tmp_path, fake_hermes, no_server):
+    f = _invite_file(tmp_path)
+    assert _cli(tmp_path, f) == 0 and no_server
+    home = Home(tmp_path / "h")
+    assert not (home.root / "seat.json").exists() and not home.hermes_dir.exists()
+    assert f.exists() and seat.current(home) == make_invite_like(home)
+
+
+def make_invite_like(home):
+    return seat.pending(home)[0]
+
+
+def test_init_and_import_still_accept_an_invited_home(tmp_path, fake_hermes, no_server):
+    from sksidekick import cli
+
+    f = _invite_file(tmp_path)
     assert _cli(tmp_path, f) == 0
-    assert not f.exists()
-    assert (tmp_path / "h" / "seat.json").exists()
+    home = Home(tmp_path / "h")
+    assert home.is_empty()
+    assert cli.main(["--home", str(home.root), "init"]) == 0
 
 
-def test_keep_invite_keeps_it(tmp_path, fake_hermes, monkeypatch):
-    from sksidekick.setup import server
-
-    monkeypatch.setattr(server, "main_setup", lambda *a, **k: 0)
+def test_invite_file_removed_only_when_shared_is_saved(running, tmp_path, fake_hermes, stub):
+    home, port = running
+    gw = stub()
     f = tmp_path / "invite.json"
-    f.write_text(make_invite().to_json())
-    assert _cli(tmp_path, f, "--keep-invite") == 0
-    assert f.exists()
+    f.write_text(make_invite(url=gw.url).to_json())
+    seat.stage(home, Invite.from_json(f.read_text()), str(f), False)
+    # another tier first: the invite is untouched
+    other = stub()
+    status, _ = post(port, {"tier": "private", "base_url": other.url, "model": "m"})
+    assert status == 200 and f.exists() and not (home.root / "seat.json").exists()
 
 
-def test_bad_invite_file_is_a_clear_line_and_setup_still_starts(tmp_path, fake_hermes, monkeypatch, capsys):
-    from sksidekick.setup import server
+def test_shared_save_installs_and_removes_the_invite_file(running, tmp_path, fake_hermes, stub):
+    home, port = running
+    gw = stub()
+    f = tmp_path / "invite.json"
+    f.write_text(make_invite(url=gw.url).to_json())
+    seat.stage(home, Invite.from_json(f.read_text()), str(f), False)
+    assert post(port, {"tier": "shared"})[0] == 200
+    assert not f.exists() and seat.load(home) is not None and seat.pending(home) is None
 
-    started = []
-    monkeypatch.setattr(server, "main_setup", lambda *a, **k: started.append(1) or 0)
+
+def test_keep_invite_keeps_it(running, tmp_path, fake_hermes, stub):
+    home, port = running
+    gw = stub()
+    f = tmp_path / "invite.json"
+    f.write_text(make_invite(url=gw.url).to_json())
+    seat.stage(home, Invite.from_json(f.read_text()), str(f), True)
+    assert post(port, {"tier": "shared"})[0] == 200
+    assert f.exists() and seat.load(home) is not None
+
+
+def test_failed_shared_save_keeps_invite_and_home_clean(running, tmp_path, fake_hermes, stub):
+    home, port = running
+    gw = stub(status=401)
+    f = tmp_path / "invite.json"
+    f.write_text(make_invite(url=gw.url).to_json())
+    seat.stage(home, Invite.from_json(f.read_text()), str(f), False)
+    assert post(port, {"tier": "shared"})[0] == 422
+    assert f.exists() and not (home.root / "seat.json").exists()
+
+
+def test_bad_invite_file_is_a_clear_line_and_setup_still_starts(tmp_path, fake_hermes, no_server, capsys):
     f = tmp_path / "invite.json"
     f.write_text("nonsense " + SECRET)
-    assert _cli(tmp_path, f) == 0
+    assert _cli(tmp_path, f) == 0 and no_server
     err = capsys.readouterr()
-    assert started and "invite" in err.err and SECRET not in err.err + err.out
-    assert f.exists() and not (tmp_path / "h" / "seat.json").exists()
+    assert "invite" in err.err and SECRET not in err.err + err.out
+    assert f.exists() and seat.pending(Home(tmp_path / "h")) is None
 
 
-def test_missing_invite_file_is_a_clear_line(tmp_path, fake_hermes, monkeypatch, capsys):
-    from sksidekick.setup import server
-
-    monkeypatch.setattr(server, "main_setup", lambda *a, **k: 0)
-    assert _cli(tmp_path, tmp_path / "nope.json") == 0
+def test_missing_invite_file_is_a_clear_line(tmp_path, fake_hermes, no_server, capsys):
+    assert _cli(tmp_path, tmp_path / "nope.json") == 0 and no_server
     assert "invite" in capsys.readouterr().err
+
+
+def test_expired_invite_at_start_is_kept_and_shown_disabled(tmp_path, fake_hermes, no_server, capsys):
+    f = _invite_file(tmp_path, days=-1)
+    assert _cli(tmp_path, f) == 0
+    err = capsys.readouterr().err
+    assert "turned off or has expired" in err and SECRET not in err and f.exists()
+    home = Home(tmp_path / "h")
+    st = tier.tiers_state(home)["shared"]
+    assert st["enabled"] is False and st["disabled_label"] == tier.REVOKED
+    assert not (home.root / "seat.json").exists()
+
+
+def test_invite_on_a_live_sidekick_is_not_used_or_deleted(tmp_path, fake_hermes, no_server, capsys):
+    home = Home(tmp_path / "h")
+    home.new_instance()
+    f = _invite_file(tmp_path)
+    assert _cli(tmp_path, f) == 1
+    assert "already set up; the invite was not used" in capsys.readouterr().err
+    assert f.exists() and not (home.root / "seat.json").exists() and not no_server
 
 
 def test_shared_enabled_only_with_seat(running, fake_hermes):
@@ -215,6 +286,23 @@ def test_unreachable_gateway_says_nothing_answered(running, fake_hermes):
     seat.install(home, make_invite(url="http://127.0.0.1:9/v1"))
     status, body = post(port, {"tier": "shared"})
     assert status == 422 and body["field"] == "tier" and "nothing answered" in body["error"]
+
+
+def test_start_over_removes_the_seat_with_its_token(bare_home, fake_hermes, capsys):
+    from sksidekick.setup import start_over, state
+
+    seat.install(bare_home, make_invite())
+    state.advance(bare_home, "tier")
+    assert start_over.start_over(bare_home, yes=True) == 0
+    assert not (bare_home.root / "seat.json").exists() and not bare_home.hermes_dir.exists()
+    assert seat.load(bare_home) is None
+
+
+def test_start_over_lists_the_seat(bare_home, fake_hermes):
+    from sksidekick.setup import start_over
+
+    seat.install(bare_home, make_invite())
+    assert any("new invite" in w for w in start_over._what(bare_home))
 
 
 def test_switching_tiers_clears_the_other_side(bare_home, fake_hermes):
