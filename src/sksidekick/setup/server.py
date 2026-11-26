@@ -329,13 +329,16 @@ def _rotate_invite(home: Home, path: str, keep: bool) -> int:
         if seat.expired(invite):
             print(f"the invite file {path} was not used ({tier.REVOKED}); it was left in place", file=sys.stderr)
             return 1
-        model = tier.DEFAULT_SHARED_MODEL
-        try:
-            r = subprocess.run(["hermes", "config", "get", "model.default"], capture_output=True, text=True,
+        def get(key: str) -> str | None:
+            r = subprocess.run(["hermes", "config", "get", key], capture_output=True, text=True,
                                timeout=60, env={**os.environ, "HERMES_HOME": str(home.hermes_dir)})
-            if r.returncode == 0 and r.stdout.strip():
-                model = r.stdout.strip()
-            seat.rotate(home, invite, model)
+            return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
+
+        try:
+            if get("model.provider") != hermes_config.GATEWAY_PROVIDER:
+                print("this sidekick does not use the shared gateway now; the invite was not used", file=sys.stderr)
+                return 1
+            seat.rotate(home, invite, get("model.default") or tier.DEFAULT_SHARED_MODEL)
         except (hermes_config.HermesError, ValueError, OSError, subprocess.SubprocessError):
             print("the new invite could not be applied; the sidekick keeps its old credential", file=sys.stderr)
             return 1

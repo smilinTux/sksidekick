@@ -99,10 +99,9 @@ def expired(invite: Invite) -> bool:
 
 
 def rotate(home: Home, invite: Invite, model: str) -> None:
-    """Apply a new credential for the seat this home already holds. All or nothing: Hermes' config and .env
-    are restored by set_gateway, and seat.json is restored here."""
-    path = home.root / FILE
-    snap = hermes_config.snapshot([path])
+    """Apply a new credential for the seat this home already holds. All or nothing: Hermes' config.yaml and
+    .env and seat.json are snapshotted together and all three are restored byte for byte on any failure."""
+    snap = hermes_config.snapshot([home.hermes_dir / "config.yaml", home.hermes_dir / ".env", home.root / FILE])
     try:
         hermes_config.set_gateway(home, invite, model)
         write_record(home, invite)

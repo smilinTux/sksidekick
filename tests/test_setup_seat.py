@@ -415,3 +415,51 @@ def test_rotation_expired_refused(tmp_path, fake_hermes, no_server, capsys):
     assert _cli(tmp_path, f) == 1
     assert "turned off or has expired" in capsys.readouterr().err
     assert f.exists() and seat.load(home) == old
+
+
+def _files(home):
+    return {n: (p.read_bytes() if p.exists() else None) for n, p in
+            (("cfg", home.hermes_dir / "config.yaml"), ("env", home.hermes_dir / ".env"), ("seat", home.root / "seat.json"))}
+
+
+def _assert_untouched(home, before, f, capsys, new_token):
+    out = capsys.readouterr()
+    assert _files(home) == before and f.exists()
+    assert new_token not in out.out + out.err and "keeps its old credential" in out.err
+
+
+def test_rotation_set_gateway_failure_changes_nothing(tmp_path, fake_hermes, no_server, capsys, monkeypatch):
+    home, _ = _live_with_seat(tmp_path, fake_hermes)
+    f, new = _rotated_file(tmp_path)
+    before = _files(home)
+    capsys.readouterr()
+    n = int(open(str(fake_hermes.store) + ".n").read())
+    monkeypatch.setenv("FAKE_HERMES_FAIL_SET", str(n + 3))
+    assert _cli(tmp_path, f) == 1
+    _assert_untouched(home, before, f, capsys, new.token)
+
+
+def test_rotation_record_failure_after_set_gateway_changes_nothing(tmp_path, fake_hermes, no_server, capsys, monkeypatch):
+    home, _ = _live_with_seat(tmp_path, fake_hermes)
+    f, new = _rotated_file(tmp_path)
+    before = _files(home)
+    capsys.readouterr()
+
+    def boom(*a, **k):
+        raise OSError("disk")
+
+    monkeypatch.setattr(seat, "write_record", boom)
+    assert _cli(tmp_path, f) == 1
+    _assert_untouched(home, before, f, capsys, new.token)
+
+
+def test_rotation_refused_when_not_on_the_gateway(tmp_path, fake_hermes, no_server, capsys):
+    home, _ = _live_with_seat(tmp_path, fake_hermes)
+    hermes_config.config_set(home, "model.provider", "custom")
+    f, new = _rotated_file(tmp_path)
+    before = _files(home)
+    capsys.readouterr()
+    assert _cli(tmp_path, f) == 1
+    out = capsys.readouterr()
+    assert "does not use the shared gateway now; the invite was not used" in out.err
+    assert _files(home) == before and f.exists() and new.token not in out.out + out.err
