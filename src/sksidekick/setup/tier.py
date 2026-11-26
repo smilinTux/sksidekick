@@ -3,31 +3,25 @@
 from __future__ import annotations
 
 import http.client
-import os
 import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
 
 from sksidekick.home import Home
-from sksidekick.setup import content, hermes_config
+from sksidekick.setup import content, hermes_config, seat
 from sksidekick.setup.state import FieldError
 
 DEFAULT_SHARED_MODEL = "sk-default"
 _BAD = "\n\r\0"
 
 
-def _seat() -> tuple[str, str]:
-    return os.environ.get(content.GATEWAY_URL_ENV, ""), os.environ.get(content.GATEWAY_KEY_ENV, "")
-
-
-def tiers_state() -> dict:
-    """What the page needs to draw the three options. The gateway key is never included."""
-    url, key = _seat()
+def tiers_state(home: Home) -> dict:
+    """What the page needs to draw the three options. The gateway token is never included."""
+    inv = seat.load(home)
     out = {t["id"]: dict(t) for t in content.TIERS}
-    enabled = bool(url and key)
-    out["shared"].update(enabled=enabled, key_set=bool(key))
-    if enabled:
-        out["shared"]["base_url"] = url
+    out["shared"]["enabled"] = inv is not None
+    if inv is not None:
+        out["shared"]["host"] = urlsplit(inv.gateway_url).hostname or ""
     else:
         out["shared"]["disabled_label"] = content.SHARED_DISABLED
     return out
@@ -68,17 +62,47 @@ def _reachable(base_url: str, api_key: str | None) -> None:
         raise FieldError("base_url", "nothing answered at that address") from None
 
 
+REVOKED = "this invite was turned off or has expired; ask for a new one"
+
+
+def _gateway_reachable(inv) -> None:
+    """Ask the gateway for its models with the seat's own headers; it meters us under the client id."""
+    if seat.expired(inv):
+        raise FieldError("tier", REVOKED)
+    req = urllib.request.Request(inv.gateway_url.rstrip("/") + "/models")
+    req.add_header("Authorization", f"Bearer {inv.token}")
+    req.add_header("x-agent-id", inv.agent_id)
+    req.add_header("x-sk-client-id", inv.client_id)
+    req.add_header("x-sk-credential-revision", inv.credential_revision)
+    try:
+        with _OPENER.open(req, timeout=5) as r:
+            if not 200 <= r.status < 300:
+                raise OSError
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):  # client_auth_denied: revoked, expired or unknown credential
+            raise FieldError("tier", REVOKED) from None
+        raise FieldError("tier", "nothing answered at the gateway") from None
+    except (OSError, ValueError, http.client.HTTPException, urllib.error.URLError):
+        raise FieldError("tier", "nothing answered at the gateway") from None
+
+
 def handle(home: Home, body: dict) -> dict:
     tier = body.get("tier")
     if tier not in {t["id"] for t in content.TIERS}:
         raise FieldError("tier", "choose one of the three options")
     if tier == "shared":
-        url, key = _seat()
-        if not (url and key):
+        inv = seat.load(home)
+        if inv is None:
             raise FieldError("tier", content.SHARED_DISABLED)
-        base_url, api_key = url, key
         model = _text(body, "model") or DEFAULT_SHARED_MODEL
-        _check_url(base_url)
+        if any(c in model for c in _BAD) or model.startswith("-"):
+            raise FieldError("model", "enter a model name")
+        _gateway_reachable(inv)
+        try:
+            hermes_config.set_gateway(home, inv, model)
+        except (hermes_config.HermesError, ValueError):
+            raise FieldError("model", "the sidekick could not save this setting") from None
+        return {}
     else:
         base_url, model = _text(body, "base_url"), _text(body, "model")
         api_key = _text(body, "api_key") or None

@@ -156,7 +156,7 @@ class _Handler(BaseHTTPRequestHandler):
             extra = {"Set-Cookie": f"{COOKIE}={self.server.token}; HttpOnly; SameSite=Strict; Path=/"}
         if url.path == "/api/state":
             home = self.server.home
-            out = {**state.load(home), "tiers": tier.tiers_state(), "channels": channels.channels_state(home), **soul.personality_state(),
+            out = {**state.load(home), "tiers": tier.tiers_state(home), "channels": channels.channels_state(home), **soul.personality_state(),
                    "backup_warning": backup_step.warning(home), **where(home)}
             return self._send(200, json.dumps(out).encode(), "application/json", extra)
         rel = "index.html" if url.path == "/" else url.path[len("/static/"):] if url.path.startswith("/static/") else None

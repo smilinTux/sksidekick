@@ -156,7 +156,34 @@ def _cmd_setup(home: Home, a) -> int:
         return 2
     from sksidekick.setup import server
 
+    if a.invite:
+        _install_invite(home, a.invite, keep=a.keep_invite)
+    elif a.keep_invite:
+        print("--keep-invite goes with --invite", file=sys.stderr)
+        return 2
     return server.main_setup(home, a.host, a.port)
+
+
+def _install_invite(home: Home, path: str, *, keep: bool) -> None:
+    """Take the operator's invite file. A missing or bad one is one plain line, never its contents, and
+    setup still starts with the shared tier disabled."""
+    from sksidekick.seats.record import Invite
+    from sksidekick.setup import hermes_config, seat
+
+    try:
+        invite = Invite.from_json(Path(path).read_text())
+        seat.install(home, invite)
+    except OSError:
+        print(f"could not read the invite file {path}; setup starts without a seat", file=sys.stderr)
+        return
+    except (ValueError, hermes_config.HermesError) as e:
+        print(f"the invite file {path} was not used ({e}); setup starts without a seat", file=sys.stderr)
+        return
+    if not keep:
+        try:
+            Path(path).unlink()
+        except OSError:
+            print(f"the invite was installed but {path} could not be removed; delete it", file=sys.stderr)
 
 
 def _cmd_status(home: Home, a) -> int:
@@ -214,6 +241,8 @@ def _parser() -> argparse.ArgumentParser:
     u.add_argument("--start-over", action="store_true",
                    help="throw away an unfinished setup (keys, settings, progress) so it can begin again; never a live sidekick")
     u.add_argument("--yes", action="store_true", help="with --start-over: do not ask first")
+    u.add_argument("--invite", metavar="FILE", help="an invite file from whoever runs your gateway; enables the shared option")
+    u.add_argument("--keep-invite", action="store_true", help="with --invite: keep the file (it is a secret; it is deleted by default)")
     u.set_defaults(fn=_cmd_setup)
     return p
 

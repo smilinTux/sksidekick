@@ -28,8 +28,13 @@ if [ ! -f "$home/state/instance.json" ] && [ "${SKSIDEKICK_SETUP:-on}" != off ];
     said=1
     # Only a container gets here (the plain install's service has SKSIDEKICK_SETUP=off): say so to setup,
     # whose model and backup hints differ there. The image's Dockerfile sets it too, for docker exec.
+    # SKSIDEKICK_INVITE: a path to an invite file mounted into the container (setup deletes it once installed, or
+    # warns when it cannot, as on a read-only mount). A missing or bad file is one line in this log and setup starts without a seat.
+    invite_args=""
+    [ -z "${SKSIDEKICK_INVITE:-}" ] || invite_args=1
     SKSIDEKICK_IN_CONTAINER="${SKSIDEKICK_IN_CONTAINER:-1}" \
-        "$bin/sksidekick" setup --host 0.0.0.0 --port "${SKSIDEKICK_SETUP_PORT:-8765}" &
+        "$bin/sksidekick" setup --host 0.0.0.0 --port "${SKSIDEKICK_SETUP_PORT:-8765}" \
+        ${invite_args:+--invite "$SKSIDEKICK_INVITE"} &
     setup_pid=$!
     stopping=""
     # docker stop and systemd send SIGTERM here: pass it on so setup shreds an unconfirmed key, then leave.
