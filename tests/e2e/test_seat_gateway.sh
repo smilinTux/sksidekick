@@ -79,7 +79,21 @@ cid="$(printf '%s\n' "$out" | sed -n 's/^seat \(sk-[0-9a-f]*\) for .*/\1/p')"
 [ "$(stat -c %a "$gw/clients.json" 2>/dev/null || stat -f %Lp "$gw/clients.json")" = 600 ] || fail "the registry is not 0600"
 ok "seat $cid added; registry written"
 
-# 4. The gateway, configured like a sidekick gateway (docs/SEATS.md).
+# 4. The gateway, configured like a sidekick gateway (docs/SEATS.md). With client_auth on, the admin routes
+# (/admin/clients/usage) need an operator credential too: a synthetic one, its headers kept in a 0600 file.
+python3 - "$gw/operators.json" "$work/operator.headers" <<'PY'
+import hashlib, json, os, secrets, sys
+tok = secrets.token_urlsafe(32)
+reg = {"schema_version": 1, "revision": "op-r1", "credentials": [{"agent_id": "local-operator",
+       "client_id": "seat-console", "token_sha256": hashlib.sha256(tok.encode()).hexdigest(),
+       "credential_revision": "operator-r1", "revoked": False, "expires_at": "2099-01-01T00:00:00Z"}]}
+for path, text in ((sys.argv[1], json.dumps(reg)), (sys.argv[2], f"Authorization: Bearer {tok}\n"
+        "x-sk-operator-id: local-operator\nx-sk-operator-client-id: seat-console\n"
+        "x-sk-operator-credential-revision: operator-r1\n")):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+PY
 printf 'enabled: true\nexempt_backends: []\nfamilies: { stub: ["%s"] }\nalerts: { outbox: %s }\ndeepseek_balance_poll_minutes: 0\n' \
     "$MODEL" "$gw/logs/alerts.jsonl" > "$gw/cluster/caps.yaml"
 cat > "$gw/cluster/gw.yaml" <<EOF
@@ -117,6 +131,11 @@ client_auth:
   agent_header: x-agent-id
   client_header: x-sk-client-id
   revision_header: x-sk-credential-revision
+operator_auth:
+  enabled: true
+  credentials_file: "$gw/operators.json"
+  expected_owner_uid: $(id -u)
+  expected_group_gid: null
 backends:
   stub:
     url: http://127.0.0.1:$stub_port/v1
@@ -169,8 +188,8 @@ ok "a Hermes turn went through the gateway to the model"
 
 # 7. Metered under the seat's client id, and the operator's tool names the owner.
 sleep 7  # metrics flush every 5 s
-curl -sS -o "$work/usage.json" "http://127.0.0.1:$gw_port/admin/clients/usage" || fail "/admin/clients/usage did not answer"
-python3 - "$work/usage.json" "$cid" <<'EOF' || fail "the usage does not count the turn under $cid"
+curl -sS -H @"$work/operator.headers" -o "$work/usage.json" "http://127.0.0.1:$gw_port/admin/clients/usage" || fail "/admin/clients/usage did not answer"
+python3 - "$work/usage.json" "$cid" <<'EOF' || { head -c 2000 "$work/usage.json"; echo; fail "the usage does not count the turn under $cid"; }
 import json, sys
 d = json.load(open(sys.argv[1]))
 cid = sys.argv[2]

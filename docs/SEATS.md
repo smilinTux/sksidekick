@@ -34,6 +34,11 @@ client_auth:
   client_header: x-sk-client-id
   revision_header: x-sk-credential-revision
 
+operator_auth:                         # with client auth on, every /admin route needs an operator credential
+  enabled: true
+  credentials_file: /srv/sidekick-gateway/operators.json
+  expected_owner_uid: 1001
+
 privacy:
   content_logs: false
 
@@ -44,6 +49,8 @@ evidence_budget_monitoring:
 - `clients.json` must be owned by that user with mode 0600 (or 0640 with `expected_group_gid` set). The
   gateway refuses any other mode or owner.
 - `evidence_budget_monitoring` is what serves `/admin/clients/usage`. Without it there is no usage to read.
+- `operators.json` has the same format and rules as `clients.json`, with one credential for you (the
+  operator). Without `operator_auth` the gateway refuses every `/admin` route once client auth is on.
 - With client auth on, the gateway meters by the verified client id and ignores the caller's `x-app` header,
   so a sidekick cannot charge another seat.
 - Give the instance a public HTTPS name, for example `https://gateway.example.com`. Invites refuse a plain
@@ -139,11 +146,13 @@ one.
 
 ## Read usage
 
-The usage endpoint answers on loopback only. On the gateway host, save the response, then read it with the
-tool:
+The usage endpoint answers on loopback only, and only to your operator credential. Keep its four headers
+(`Authorization: Bearer <operator token>`, `x-sk-operator-id`, `x-sk-operator-client-id`,
+`x-sk-operator-credential-revision`) in a file with mode 0600, so the token is never on a command line. On the
+gateway host, save the response, then read it with the tool:
 
 ```sh
-curl -s http://127.0.0.1:PORT/admin/clients/usage -o usage.json
+curl -s -H @operator.headers http://127.0.0.1:PORT/admin/clients/usage -o usage.json
 ```
 
 ```sh
