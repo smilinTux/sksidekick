@@ -33,7 +33,7 @@ def test_doc_has_every_command():
 
 
 def test_no_dashes_in_doc():
-    assert "—" not in DOC.read_text() and "–" not in DOC.read_text()
+    assert "\u2014" not in DOC.read_text() and "\u2013" not in DOC.read_text()
 
 
 def test_doc_commands_run(tmp_path, monkeypatch, capsys):
