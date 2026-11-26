@@ -14,10 +14,8 @@
 set -eu
 repo="$(cd "$(dirname "$0")/../.." && pwd)"
 SKGATEWAY_REPO="${SKGATEWAY_REPO:-https://github.com/smilinTux/skgateway}"
-# Pinned to the head of skgateway PR 222 (client auth, privacy.content_logs). It MUST be re-pinned to the
-# skgateway release that contains PR 222 before this branch reaches main.
-SKGATEWAY_REF="${SKGATEWAY_REF:-837ab43b45372d1e47724e6e1e149f5f223876ee}"
-SKGATEWAY_PR_REF="${SKGATEWAY_PR_REF:-refs/pull/222/head}"  # fallback while the SHA is only on the PR
+# Pinned to the commit of release tag skgateway-v1.1.23 (client auth metering, privacy.content_logs).
+SKGATEWAY_REF="${SKGATEWAY_REF:-69b8e43c10ac77269cf9b8bc84d1a2f1006340de}"
 MODEL=seat-stub
 ESTATE=e2e
 OWNER="Example Seat Holder"
@@ -56,11 +54,7 @@ no_needle() {
 
 # 1. skgateway at the pinned commit, and the stub model behind it.
 git init -q "$gwsrc"
-# The SHA directly; if the server will not serve it, the PR head ref (which then must be that SHA).
-if ! git -C "$gwsrc" fetch -q --depth 1 "$SKGATEWAY_REPO" "$SKGATEWAY_REF" 2>/dev/null; then
-    git -C "$gwsrc" fetch -q "$SKGATEWAY_REPO" "$SKGATEWAY_PR_REF" || fail "could not fetch skgateway $SKGATEWAY_REF or $SKGATEWAY_PR_REF"
-    git -C "$gwsrc" cat-file -e "$SKGATEWAY_REF^{commit}" 2>/dev/null || fail "$SKGATEWAY_PR_REF does not contain $SKGATEWAY_REF"
-fi
+git -C "$gwsrc" fetch -q --depth 1 "$SKGATEWAY_REPO" "$SKGATEWAY_REF" || fail "could not fetch skgateway $SKGATEWAY_REF"
 git -C "$gwsrc" checkout -q "$SKGATEWAY_REF"
 [ "$(git -C "$gwsrc" rev-parse HEAD)" = "$SKGATEWAY_REF" ] || fail "skgateway is not at $SKGATEWAY_REF"
 (cd "$gwsrc" && npm ci --omit=dev --no-audit --no-fund --loglevel=error) >"$work/npm.log" 2>&1 \

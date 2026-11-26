@@ -20,7 +20,7 @@ what the person gets when they pick the shared option at setup.
 ## One-time setup: a sidekick gateway
 
 Run a separate skgateway instance for sidekick seats, on a skgateway release with client auth and
-privacy.content_logs (PR 222). Do not turn client auth on for a gateway your own agents already use: every
+privacy.content_logs (v1.1.23 or later). Do not turn client auth on for a gateway your own agents already use: every
 caller of it would then need a credential.
 
 In the instance's `skgateway.yaml`:
