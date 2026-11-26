@@ -209,24 +209,47 @@ no_needle "$token" "token" "$gw" "$work/gateway.out" "$work/setup.log" "$work/in
 ok "the canary and the token are in no gateway file and not in its output"
 
 # 9. Remove the seat: revoke plus SIGHUP, and the next turn is refused with 401.
+# The seat's own headers, from the sidekick's .env and seat.json, in a 0600 file (never on a command line).
+python3 - "$H/hermes/.env" "$H/seat.json" "$work/seat.headers" <<'PY'
+import json, os, sys
+env = dict(l.split("=", 1) for l in open(sys.argv[1]).read().splitlines() if "=" in l)
+rec = json.load(open(sys.argv[2]))
+fd = os.open(sys.argv[3], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(fd, "w") as f:
+    f.write(f"Authorization: Bearer {env['SKSIDEKICK_GATEWAY_TOKEN'].strip()}\nx-agent-id: {rec['agent_id']}\n"
+            f"x-sk-client-id: {rec['client_id']}\nx-sk-credential-revision: {rec['credential_revision']}\n")
+PY
+seat_models() { curl -s -o /dev/null -w '%{http_code}' -H @"$work/seat.headers" "http://127.0.0.1:$gw_port/v1/models"; }
+code="$(seat_models)"
+[ "$code" = 200 ] || fail "the seat's own credential got $code from the gateway before the remove, not 200"
 seat remove "$cid" --registry "$gw/clients.json" >/dev/null || fail "sksidekick-seat remove failed"
 kill -HUP "$gw_pid"
 sleep 2
 kill -0 "$gw_pid" 2>/dev/null || { tail -20 "$work/gateway.out"; fail "the gateway died on SIGHUP"; }
-code="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" -H "x-agent-id: sidekick" \
-    -H "x-sk-client-id: $cid" -H "x-sk-credential-revision: $(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["credential_revision"])' "$H/seat.json")" \
-    "http://127.0.0.1:$gw_port/v1/models")"
+code="$(seat_models)"
 [ "$code" = 401 ] || fail "the revoked credential got $code from the gateway, not 401"
+ok "the same seat request: 200 before the remove, 401 after remove and SIGHUP"
+# Only log lines written by the next turn count: note each Hermes log file's size now, read past it later.
+find "$H/hermes/logs" -type f 2>/dev/null | while IFS= read -r f; do
+    printf '%s\t%s\n' "$(wc -c < "$f" | tr -d ' ')" "$f"
+done > "$work/log.sizes"
+new_log_lines() {
+    find "$H/hermes/logs" -type f 2>/dev/null | while IFS= read -r f; do
+        n="$(awk -F '\t' -v f="$f" '$2 == f { print $1 }' "$work/log.sizes")"
+        tail -c +"$(( ${n:-0} + 1 ))" "$f"
+    done
+}
 seen="$(grep -c . "$work/backend.jsonl")"
 rc=0
 turn="$(hermes chat -Q -q "Second turn after removal $CANARY." 2>&1)" || rc=$?
 [ "$(grep -c . "$work/backend.jsonl")" = "$seen" ] || fail "a turn reached the model after the seat was removed"
 printf '%s\n' "$turn" | tail -5 | sed 's/^/  hermes: /'
-logs="$(grep -rhE "401|[Uu]nauthori[sz]ed|client_auth|turned off|expired" "$H/hermes/logs" 2>/dev/null | tail -5 || true)"
+logs="$(new_log_lines | grep -F client_auth_denied | tail -3 || true)"
 printf '%s\n' "$logs" | sed 's/^/  log: /'
-printf '%s\n%s\n' "$turn" "$logs" | grep -qE "401|[Uu]nauthori[sz]ed|client_auth" \
-    || fail "neither the Hermes turn (exit $rc) nor its logs show the 401"
-ok "after remove and SIGHUP the gateway refuses the seat (401) and Hermes reports it (exit $rc)"
+[ "$rc" != 0 ] || fail "the Hermes turn after the remove exited 0"
+printf '%s\n' "$turn" | grep -qE "HTTP 401\b|client_auth_denied" || fail "the Hermes turn after the remove does not report the 401"
+[ -n "$logs" ] || fail "no Hermes log line written by the refused turn names client_auth_denied"
+ok "after remove and SIGHUP Hermes reports the gateway's 401 (exit $rc; client_auth_denied in its new log lines)"
 no_needle "$CANARY" "canary (turn content)" "$gw" "$work/gateway.out"
 no_needle "$token" "token" "$gw" "$work/gateway.out"
 ok "still no content and no token on the gateway after the refused turn"
