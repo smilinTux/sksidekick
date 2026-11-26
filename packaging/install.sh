@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Plain sksidekick install for macOS and Linux (no container):
-#   install.sh [--home PATH] [--no-init | --init | --setup-headless] [--uninstall] [--force-hermes-link]
+#   install.sh [--home PATH] [--no-init | --init | --setup-headless] [--invite FILE [--keep-invite]] [--uninstall] [--force-hermes-link]
 #   default: start the setup page and open it in your browser (the recovery phrase is shown there, once).
 #   --setup-headless: print the setup page's address instead of opening a browser.
 #   --init: no page; create the sidekick in this terminal (`sksidekick init`, phrase printed here).
 #   --no-init: leave the home empty for `sksidekick import` (moving here); the service waits for it.
+#   --invite FILE: the operator's seat invite, passed to setup (deleted once installed unless --keep-invite).
 # Code goes in the app folder; the sidekick's data (its home) goes elsewhere and is never removed here.
 set -eu
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -32,6 +33,8 @@ uninstall=""
 force_link=""
 no_init=""
 mode="browser"
+invite=""
+keep=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --home) [ $# -ge 2 ] || die "--home needs a path"; home="$2"; shift 2 ;;
@@ -40,10 +43,17 @@ while [ $# -gt 0 ]; do
         --init) mode="init"; shift ;;
         --setup-headless) mode="headless"; shift ;;
         --force-hermes-link) force_link=1; shift ;;
-        -h|--help) sed -n 2,9p "$0"; exit 0 ;;
+        --invite) [ $# -ge 2 ] || die "--invite needs a file"; invite="$2"; shift 2 ;;
+        --keep-invite) keep=1; shift ;;
+        -h|--help) sed -n 2,10p "$0"; exit 0 ;;
         *) die "unknown option: $1" ;;
     esac
 done
+[ -z "$keep" ] || [ -n "$invite" ] || die "--keep-invite goes with --invite"
+if [ -n "$invite" ]; then
+    { [ -z "$no_init" ] && [ "$mode" != init ]; } || die "--invite does not go with --no-init or --init (the invite is taken by the setup page)"
+    case "$invite" in /*) ;; *) invite="$(pwd)/$invite" ;; esac
+fi
 
 stop_service() {
     if [ "$(uname -s)" = Darwin ]; then
@@ -152,14 +162,20 @@ else
     systemctl --user enable --now sksidekick.service
 fi
 
-if [ -z "$no_init" ] && [ "$mode" != init ] && [ ! -f "$home/state/instance.json" ]; then
-    say "Setup page: choose the model, channels and personality, and write down your recovery phrase"
+# An invite on a sidekick that is already set up is a rotation for its seat: sksidekick-setup applies it.
+if [ -z "$no_init" ] && [ "$mode" != init ] && { [ ! -f "$home/state/instance.json" ] || [ -n "$invite" ]; }; then
+    if [ -f "$home/state/instance.json" ]; then
+        say "Already set up: applying the new seat invite"
+    else
+        say "Setup page: choose the model, channels and personality, and write down your recovery phrase"
+    fi
     flag=""
     [ "$mode" = headless ] && flag="--headless"
     rc=0
-    "$app/bin/sksidekick-setup" $flag || rc=$?
+    "$app/bin/sksidekick-setup" $flag ${invite:+--invite "$invite"} ${keep:+--keep-invite} || rc=$?
     [ "$rc" = 0 ] || die "setup stopped (exit $rc). Run \"$app/bin/sksidekick-setup\" to go on where it stopped (add --start-over to begin again), or run install.sh again."
 fi
 
 echo "Done. Your sidekick's home: $home"
 echo "Check it any time with: \"$app/bin/sksidekick\" --home \"$home\" status"
+echo "A new seat invite later (a rotation): \"$app/bin/sksidekick-setup\" --invite FILE"

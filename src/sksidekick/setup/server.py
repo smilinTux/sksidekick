@@ -300,6 +300,15 @@ def _stage_invite(home: Home, path: str, keep: bool) -> None:
     seat.stage(home, invite, path, keep)
 
 
+def _restart_command() -> str:
+    """How to restart this sidekick where it runs (packaging/: the container, the launchd agent, the unit)."""
+    if os.environ.get("SKSIDEKICK_IN_CONTAINER") == "1":
+        return "docker restart <container> (on the host)"
+    if sys.platform == "darwin":
+        return f"launchctl kickstart -k gui/{os.getuid()}/io.skworld.sksidekick"
+    return "systemctl --user restart sksidekick"
+
+
 def _rotate_invite(home: Home, path: str, keep: bool) -> int:
     """A live sidekick takes a new invite only for the seat it already has (same client id): a rotation."""
     from sksidekick.seats.record import Invite
@@ -347,7 +356,7 @@ def _rotate_invite(home: Home, path: str, keep: bool) -> int:
                 os.unlink(path)
             except OSError:
                 print(f"the new invite was applied but {path} could not be removed; delete it", file=sys.stderr)
-        print("the new invite was applied; restart the sidekick if it is running (it reads the credential when it starts)")
+        print(f"the new invite was applied; restart the sidekick so it reads the new credential: {_restart_command()}")
         return 0
     finally:
         if lock not in (None, -1):

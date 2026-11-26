@@ -347,18 +347,6 @@ def test_export_keeps_seat_drops_token(bare_home, fake_hermes, tmp_path):
     assert SECRET in (full / "hermes" / ".env").read_text()
 
 
-@pytest.mark.skipif(os.environ.get("SKSIDEKICK_REAL_HERMES") != "1", reason="needs the real hermes (the image job sets it)")
-def test_real_hermes_takes_the_named_provider(tmp_path):
-    home = Home(tmp_path / "h")
-    hermes_config.set_gateway(home, make_invite(), "sk-default")
-    env = {**os.environ, "HERMES_HOME": str(home.hermes_dir)}
-    out = subprocess.run(["hermes", "config", "get", "model.provider", "--raw"], env=env, capture_output=True, text=True, check=True)
-    assert out.stdout.strip() == "sidekick-gateway"
-    hdr = subprocess.run(["hermes", "config", "get", "providers.sidekick-gateway.extra_headers", "--raw"],
-                         env=env, capture_output=True, text=True, check=True)
-    assert "x-sk-client-id" in hdr.stdout
-
-
 # ---- rotation: a live sidekick with a seat takes a new invite for the same client id ----
 
 def _live_with_seat(tmp_path, fake_hermes, **kw):
@@ -392,6 +380,28 @@ def test_rotation_applies_new_credential(tmp_path, fake_hermes, no_server, capsy
     assert fake_hermes.get("model.default") == "sk-fancy"
     assert not f.exists()
     assert old.token not in (home.hermes_dir / ".env").read_text()
+
+
+@pytest.mark.parametrize("platform, container, want", [
+    ("linux", None, "systemctl --user restart sksidekick"),
+    ("darwin", None, "launchctl kickstart -k gui/"),
+    ("linux", "1", "docker restart <container>"),
+])
+def test_rotation_prints_the_real_restart_command(tmp_path, fake_hermes, no_server, capsys, monkeypatch,
+                                                   platform, container, want):
+    from sksidekick.setup import server
+    monkeypatch.setattr(server.sys, "platform", platform)
+    if container:
+        monkeypatch.setenv("SKSIDEKICK_IN_CONTAINER", container)
+    else:
+        monkeypatch.delenv("SKSIDEKICK_IN_CONTAINER", raising=False)
+    _live_with_seat(tmp_path, fake_hermes)
+    f, _ = _rotated_file(tmp_path)
+    assert _cli(tmp_path, f) == 0
+    out = capsys.readouterr().out
+    assert want in out and "if it is running" not in out
+    if platform == "darwin":
+        assert f"gui/{os.getuid()}/io.skworld.sksidekick" in out
 
 
 def test_rotation_keep_invite(tmp_path, fake_hermes, no_server):

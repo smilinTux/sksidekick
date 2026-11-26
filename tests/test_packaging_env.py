@@ -114,3 +114,44 @@ def test_wrapper_forwards_invite_flags(tmp_path):
     assert r.returncode == 0 and "--invite|/i.json|" in r.stdout and "already set up" not in r.stdout
     r = subprocess.run(["bash", str(w), "--keep-invite"], capture_output=True, text=True, timeout=30)
     assert r.returncode == 2 and "--invite" in r.stderr
+
+
+def test_install_forwards_invite_flags_to_setup():
+    install = (PKG / "install.sh").read_text()
+    assert '"$app/bin/sksidekick-setup" $flag ${invite:+--invite "$invite"} ${keep:+--keep-invite}' in install
+    assert "--invite FILE [--keep-invite]" in install.split("set -eu", 1)[0]  # in the usage lines
+
+
+def test_install_refuses_invite_misuse_before_installing(tmp_path):
+    import subprocess
+
+    env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"}
+    for args, msg in ((["--keep-invite"], "--keep-invite goes with --invite"),
+                      (["--invite"], "--invite needs a file"),
+                      (["--invite", "/i.json", "--no-init"], "--invite does not go with --no-init or --init"),
+                      (["--invite", "/i.json", "--init"], "--invite does not go with --no-init or --init")):
+        r = subprocess.run(["bash", str(PKG / "install.sh"), *args], capture_output=True, text=True, timeout=30, env=env)
+        assert r.returncode != 0 and msg in r.stderr, (args, r.stderr)
+    assert not (tmp_path / ".local").exists() and not (tmp_path / "Library").exists()
+
+
+def test_start_on_a_live_container_says_the_invite_was_not_used(tmp_path):
+    import subprocess
+
+    home, bin_ = tmp_path / "home", tmp_path / "bin"
+    (home / "state").mkdir(parents=True)
+    (home / "state" / "instance.json").write_text('{"status": "live"}')
+    bin_.mkdir()
+    for name in ("sksidekick", "python"):  # serve and the seed/live checks: all succeed
+        (bin_ / name).write_text("#!/bin/sh\nexit 0\n")
+        (bin_ / name).chmod(0o755)
+    env = {"PATH": "/usr/bin:/bin", "SKSIDEKICK_HOME": str(home), "SIDEKICK_BIN": str(bin_),
+           "SIDEKICK_SEED": str(tmp_path / "seed"), "SKSIDEKICK_INVITE": "/run/invite"}
+    r = subprocess.run(["sh", str(PKG / "sidekick-start.sh")], capture_output=True, text=True, timeout=30, env=env)
+    assert r.returncode == 0, r.stderr
+    lines = [ln for ln in (r.stdout + r.stderr).splitlines() if "invite" in ln]
+    assert len(lines) == 1 and "already set up" in lines[0] and "not used" in lines[0], lines
+    assert "sksidekick setup --invite" in lines[0]  # the rotation path for a new invite for the same seat
+    env.pop("SKSIDEKICK_INVITE")
+    r = subprocess.run(["sh", str(PKG / "sidekick-start.sh")], capture_output=True, text=True, timeout=30, env=env)
+    assert "invite" not in r.stdout + r.stderr

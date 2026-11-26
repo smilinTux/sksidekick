@@ -50,6 +50,9 @@ if [ ! -f "$home/state/instance.json" ] && [ "${SKSIDEKICK_SETUP:-on}" != off ];
         echo "Setup stopped (exit $setup_code)."
         said=""
     fi
+elif [ -n "${SKSIDEKICK_INVITE:-}" ] && [ -f "$home/state/instance.json" ]; then
+    # Never applied here: an old invite left mounted would put back a revoked credential on every restart.
+    echo "SKSIDEKICK_INVITE is set, but this sidekick is already set up; the invite was not used. A new invite for the same seat: docker exec <container> sksidekick setup --invite FILE"
 fi
 
 while [ ! -f "$home/state/instance.json" ]; do
