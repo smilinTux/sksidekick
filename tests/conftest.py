@@ -29,3 +29,9 @@ def story_home(bare_home: Home) -> Home:
     bare_home.root.mkdir(parents=True)
     write_story(bare_home)
     return bare_home
+
+
+@pytest.fixture(autouse=True)
+def _no_host_hermes(monkeypatch):
+    """A developer's own HERMES_HOME must never leak into a test."""
+    monkeypatch.delenv("HERMES_HOME", raising=False)

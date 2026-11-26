@@ -191,3 +191,15 @@ def test_reset_removes_every_search_index(keyed):
     (home.soul_dir / "index.db").write_text("x")
     lifecycle.reset(home, keep_settings=False, export_to=None)
     assert not [p for p in home.root.rglob("index.db*") if "keys" not in p.parts]
+
+
+def test_reset_wipes_the_plugin_memory_store(keyed):
+    home, _ = keyed
+    m = home.agent_memory_dir / "long-term" / "m1.json"
+    m.parent.mkdir(parents=True)
+    m.write_text("{}")
+    (home.root / "hermes/sessions").mkdir(parents=True)
+    (home.root / "hermes/sessions/s.jsonl").write_text("{}")
+    assert "hermes/.skmemory/agents/sidekick/memory/long-term/m1.json" in lifecycle.plan_reset(home, keep_settings=True)
+    lifecycle.reset(home, keep_settings=True, export_to=None)
+    assert not m.exists()

@@ -447,6 +447,71 @@ def test_unicode_normalization_duplicate_refused(keyed, tmp_path: Path):
         archive.verify(a, keys.load_identity(home))
 
 
+# plan 2, task 1: credentials ------------------------------------------------
+
+ENV = "# channel logins\nTELEGRAM_BOT_TOKEN=123:abc\n\nexport OPENAI_API_KEY='sk-live'\n"
+CONFIG = (
+    "model:\n  provider: openai\n  api_key: sk-live\n"
+    "telegram:\n  bot_token: \"123:abc\"\n  allowed_users: [42]\n"
+    "smtp:\n  password: |\n    line one\n    line two\n  host: mail.example.com\n"
+)
+
+
+@pytest.fixture
+def with_channels(keyed):
+    home, phrase = keyed
+    (home.root / "hermes").mkdir()
+    (home.root / "hermes/.env").write_text(ENV)
+    (home.root / "hermes/config.yaml").write_text(CONFIG)
+    return home, phrase
+
+
+def test_export_without_credentials_redacts_env_and_config(with_channels, tmp_path: Path):
+    home, phrase = with_channels
+    a = archive.export(home, tmp_path / "out.sksk", with_credentials=False)
+    target = Home(tmp_path / "restored")
+    archive.import_archive(a, target, phrase=phrase)
+    env = (target.root / "hermes/.env").read_text()
+    cfg = (target.root / "hermes/config.yaml").read_text()
+    assert "123:abc" not in env and "sk-live" not in env
+    assert "TELEGRAM_BOT_TOKEN=__REMOVED__" in env and "export OPENAI_API_KEY=__REMOVED__" in env
+    assert "# channel logins" in env
+    for secret in ("sk-live", "123:abc", "line one", "line two"):
+        assert secret not in cfg
+    assert "api_key: __REMOVED__" in cfg and "bot_token: __REMOVED__" in cfg and "password: __REMOVED__" in cfg
+    assert "provider: openai" in cfg and "allowed_users: [42]" in cfg and "host: mail.example.com" in cfg
+
+
+def test_default_export_keeps_credentials(with_channels, tmp_path: Path):
+    home, phrase = with_channels
+    a = archive.export(home, tmp_path / "out.sksk")
+    target = Home(tmp_path / "restored")
+    m = archive.import_archive(a, target, phrase=phrase)
+    assert (target.root / "hermes/.env").read_text() == ENV
+    assert m["redacted"] == []
+
+
+def test_redacted_listed_in_manifest(with_channels, tmp_path: Path):
+    home, _ = with_channels
+    a = archive.export(home, tmp_path / "out.sksk", with_credentials=False)
+    m = archive.verify(a, keys.load_identity(home))
+    assert m["redacted"] == ["hermes/.env", "hermes/config.yaml"]
+    assert sorted(m["redacted_keys"]) == ["OPENAI_API_KEY", "TELEGRAM_BOT_TOKEN", "api_key", "bot_token", "password"]
+
+
+def test_archive_refuses_excluded_paths(keyed, tmp_path: Path):
+    home, _ = keyed
+
+    def add(t):
+        info = tarfile.TarInfo("story/hermes/logs/gateway.log")
+        info.size = 1
+        t.addfile(info, io.BytesIO(b"x"))
+
+    a = _evil_archive(home, tmp_path / "evil.sksk", add)
+    with pytest.raises(archive.ArchiveDamaged, match="not story content"):
+        archive.verify(a, keys.load_identity(home))
+
+
 # recovery key review (2026-11-25) -------------------------------------------
 
 
@@ -491,3 +556,21 @@ def test_damaged_recovery_key_reads_as_damaged_not_wrong_phrase(keyed, tmp_path:
 def _read_members(a: Path) -> dict[str, bytes]:
     with tarfile.open(a) as t:
         return {n: t.extractfile(n).read() for n in t.getnames()}
+
+
+def test_export_skips_a_file_removed_after_listing(keyed, tmp_path: Path, monkeypatch):
+    # The running sidekick can delete a temp file between the listing and the read.
+    home, _ = keyed
+    gone = home.root / "memory" / "short-term" / "vanishing.json"
+    gone.write_text("{}")
+    real = home.story_paths
+
+    def listing():
+        paths = real()
+        gone.unlink()
+        return paths
+
+    monkeypatch.setattr(home, "story_paths", listing)
+    a = archive.export(home, tmp_path / "a.sksk")
+    monkeypatch.undo()
+    assert "memory/short-term/vanishing.json" not in archive.verify(a, keys.load_identity(home))["files"]

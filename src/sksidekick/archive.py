@@ -32,8 +32,8 @@ from pathlib import Path, PurePosixPath
 import pyrage
 from pyrage import x25519
 
-from sksidekick import keys
-from sksidekick.home import STAGING_PREFIX, Home
+from sksidekick import keys, redact
+from sksidekick.home import STAGING_PREFIX, Home, excluded
 
 FORMAT = "sksidekick.archive.v1"
 OUTER = ("manifest.json", "recovery.identity.age", "payload.age")
@@ -123,20 +123,44 @@ def _write_envelope(
     return dest
 
 
-def export(home: Home, dest: Path, *, purpose: str = "export") -> Path:
-    """Write an encrypted archive of the whole story to a NEW file *dest*."""
+def _story_bytes(home: Home, rel: Path, with_credentials: bool, redacted: list, redacted_keys: list) -> bytes:
+    data = (home.root / rel).read_bytes()
+    fn = None if with_credentials else redact.REDACTORS.get(rel.as_posix())
+    if fn is None:
+        return data
+    text, found = fn(data.decode("utf-8", errors="surrogateescape"))
+    if found:
+        redacted.append(rel.as_posix())
+        redacted_keys.extend(k for k in found if k not in redacted_keys)
+    return text.encode("utf-8", errors="surrogateescape")
+
+
+def export(home: Home, dest: Path, *, purpose: str = "export", with_credentials: bool = True) -> Path:
+    """Write an encrypted archive of the whole story to a NEW file *dest*.
+
+    Without *with_credentials*, login secrets in Hermes' ``.env`` and ``config.yaml``
+    are replaced by ``__REMOVED__`` and listed in the inner manifest.
+    """
     links = home.symlinks()
     if links:
         shown = ", ".join(str(p) for p in links[:5])
         raise StoryError(f"the home holds symlinks, which an archive would leave out: {shown}. Replace them with real files first.")
     files = {}
+    redacted: list[str] = []
+    redacted_keys: list[str] = []
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as t:
         for rel in home.story_paths():
-            data = (home.root / rel).read_bytes()
+            try:
+                data = _story_bytes(home, rel, with_credentials, redacted, redacted_keys)
+            except FileNotFoundError:
+                continue  # removed by the running sidekick after the listing (a journal, a temp file): not part of the story now
             files[rel.as_posix()] = _sha256(data)
             _add(t, f"{STORY}/{rel.as_posix()}", data)
-        inner = {"format": FORMAT, "created": _now(), "instance_id": home.instance()["instance_id"], "files": files}
+        inner = {
+            "format": FORMAT, "created": _now(), "instance_id": home.instance()["instance_id"], "files": files,
+            "redacted": redacted, "redacted_keys": redacted_keys,
+        }
         _add(t, INNER_MANIFEST, json.dumps(inner, indent=1).encode())
     wrapped = keys.checked_wrapped(home)
     return _write_envelope(
@@ -168,7 +192,7 @@ def _safe_rel(name: str) -> PurePosixPath:
     if p.is_absolute() or ".." in p.parts or not p.parts or p.parts[0] != STORY or len(p.parts) < 2:
         raise ArchiveDamaged(f"archive refused: unsafe member path {name!r}")
     rel = PurePosixPath(*p.parts[1:])
-    if rel.parts[0].casefold() in _REFUSED_TOP or rel.name.casefold().startswith("index.db"):
+    if rel.parts[0].casefold() in _REFUSED_TOP or rel.name.casefold().startswith("index.db") or excluded(rel):
         raise ArchiveDamaged(f"archive refused: {name!r} is not story content")
     return rel
 
@@ -233,6 +257,8 @@ def _open_payload(outer: dict[str, bytes], identity: x25519.Identity) -> tuple[d
         if _sha256(files[rel]) != digest:
             raise ArchiveDamaged(f"archive damaged: {rel} does not match its checksum")
     inner = dict(inner, purpose=manifest.get("purpose"))
+    inner.setdefault("redacted", [])
+    inner.setdefault("redacted_keys", [])
     return inner, files
 
 
@@ -325,7 +351,7 @@ def import_archive(
     return inner
 
 
-def export_plain(home: Home, dest_dir: Path) -> int:
+def export_plain(home: Home, dest_dir: Path, *, with_credentials: bool = False) -> int:
     """Copy the story, decrypted and readable, to a new private directory on the user's own device."""
     links = home.symlinks()
     if links:
@@ -333,6 +359,7 @@ def export_plain(home: Home, dest_dir: Path) -> int:
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=False, mode=0o700)
     os.chmod(dest_dir, 0o700)
-    for rel in home.story_paths():
-        _write_private_file(dest_dir / rel, (home.root / rel).read_bytes())
-    return len(home.story_paths())
+    paths = home.story_paths()
+    for rel in paths:
+        _write_private_file(dest_dir / rel, _story_bytes(home, rel, with_credentials, [], []))
+    return len(paths)

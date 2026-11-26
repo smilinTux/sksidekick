@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>io.skworld.sksidekick</string>
+  <key>ProgramArguments</key>
+  <array><string>@APP@/bin/sidekick-start</string></array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>SKSIDEKICK_HOME</key><string>@HOME@</string>
+    <key>SIDEKICK_SEED</key><string>@APP@/hermes-seed</string>
+    <key>SIDEKICK_BIN</key><string>@APP@/sksidekick/bin</string>
+    <key>SIDEKICK_SKMEMORY_JSON</key><string>@APP@/skmemory.json</string>
+    <key>PATH</key><string>@APP@/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>30</integer>
+  <key>StandardOutPath</key><string>@APP@/logs/sksidekick.log</string>
+  <key>StandardErrorPath</key><string>@APP@/logs/sksidekick.log</string>
+</dict>
+</plist>

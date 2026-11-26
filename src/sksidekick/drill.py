@@ -15,8 +15,8 @@ def _path(home: Home) -> Path:
     return home.state_dir / "drill.json"
 
 
-def run_drill(home: Home) -> dict:
-    at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+def run_drill(home: Home, *, now: _dt.datetime | None = None) -> dict:
+    at = (now or _dt.datetime.now(_dt.timezone.utc)).isoformat(timespec="seconds")
     latest = backup.latest(home)
     result = {"at": at, "ok": False, "backup": latest.name if latest else None, "created": None, "files": 0, "error": None}
     if latest is None:

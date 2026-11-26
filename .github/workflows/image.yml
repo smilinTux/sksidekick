@@ -1,0 +1,70 @@
+name: image
+on:
+  pull_request:
+  push:
+    tags: ["sksidekick-v*"]
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Load pinned versions
+        run: grep -vE '^\s*(#|$)' packaging/versions.env >> "$GITHUB_ENV"
+      - name: Hermes fork at the pinned tag and commit
+        run: |
+          git clone --depth 1 --branch "$HERMES_REF" "$HERMES_REPO" hermes
+          test "$(git -C hermes rev-parse HEAD)" = "$HERMES_COMMIT"
+      - name: Build the Hermes stage
+        run: docker build -t sksidekick-hermes:build hermes
+      - name: Build the sksidekick image
+        run: |
+          docker build -f packaging/Dockerfile \
+            --build-arg SKMEMORY_VERSION --build-arg HERMES_SKMEMORY_REF --build-arg HERMES_SKMEMORY_SHA256 \
+            -t "sksidekick:${{ matrix.arch }}" .
+      - name: Image checks
+        run: bash tests/image/test_image.sh "sksidekick:${{ matrix.arch }}"
+      - name: A Hermes turn becomes a memory
+        run: bash tests/image/test_memory_turn.sh "sksidekick:${{ matrix.arch }}"
+      - name: User systemd session (for the move test)
+        if: matrix.arch == 'amd64'
+        run: |
+          sudo loginctl enable-linger "$USER"
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
+          for _ in $(seq 30); do [ -S "/run/user/$(id -u)/bus" ] && break; sleep 1; done
+      - name: Move between the image and a plain install
+        if: matrix.arch == 'amd64'
+        run: bash tests/image/test_move.sh "sksidekick:${{ matrix.arch }}"
+      - name: Push the arch image (tags only)
+        if: startsWith(github.ref, 'refs/tags/sksidekick-v')
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          ref="ghcr.io/smilintux/sksidekick:${GITHUB_REF_NAME#sksidekick-v}-${{ matrix.arch }}"
+          docker tag "sksidekick:${{ matrix.arch }}" "$ref"
+          docker push "$ref"
+  manifest:
+    if: startsWith(github.ref, 'refs/tags/sksidekick-v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      packages: write
+    steps:
+      - name: Multi-arch manifest
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          v="${GITHUB_REF_NAME#sksidekick-v}"
+          docker buildx imagetools create -t "ghcr.io/smilintux/sksidekick:$v" \
+            "ghcr.io/smilintux/sksidekick:$v-amd64" "ghcr.io/smilintux/sksidekick:$v-arm64"

@@ -123,3 +123,18 @@ def test_move_cancel_command(capsys, tmp_path: Path):
     assert run(capsys, "--home", str(root), "move-cancel")[0] == 0
     code, out = run(capsys, "--home", str(root), "status")
     assert json.loads(out)["instance"]["status"] == "live"
+
+
+def test_cli_export_redacts_by_default_and_import_says_log_in_again(capsys, tmp_path: Path, monkeypatch):
+    root = tmp_path / "sk"
+    phrase = _init(capsys, root)
+    (root / "hermes").mkdir()
+    (root / "hermes/.env").write_text("TELEGRAM_BOT_TOKEN=123:abc\n")
+    assert run(capsys, "--home", str(root), "export", str(tmp_path / "a.sksk"))[0] == 0
+    code, out = run(
+        capsys, "--home", str(tmp_path / "new"), "import", str(tmp_path / "a.sksk"), "--phrase-stdin",
+        stdin=phrase + "\n", monkeypatch=monkeypatch,
+    )
+    assert code == 0 and "Log in again for: TELEGRAM_BOT_TOKEN" in out
+    assert "123:abc" not in (tmp_path / "new/hermes/.env").read_text()
+    assert run(capsys, "--home", str(root), "export", "--with-credentials", str(tmp_path / "b.sksk"))[0] == 0

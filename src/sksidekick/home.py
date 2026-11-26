@@ -2,19 +2,43 @@
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
 import secrets
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 STATUSES = ("live", "moving", "retired")
 _NOT_STORY = ("keys", "state")
 STAGING_PREFIX = ".sksidekick-import-"
+HERMES = "hermes"
+SKMEMORY_AGENT = "sidekick"
+# hermes-skmemory in its default (isolated) mode keeps the sidekick's memory store here,
+# inside HERMES_HOME and so inside the sidekick home: it is story and goes in every archive.
+AGENT_STORE = f"{HERMES}/.skmemory/agents/{SKMEMORY_AGENT}"
+# Rebuildable or machine-local parts of the Hermes home: never story, never in an archive.
+EXCLUDE_DIRS = (
+    "hermes/logs", "hermes/cache", "hermes/tools", "hermes/plugins",
+    # dependency venvs a plain-install Hermes builds per home, process runtime, media caches, update checks
+    "hermes/installs", "hermes/runtime", "hermes/audio_cache", "hermes/image_cache", "hermes/plugin-update-checks",
+    f"{AGENT_STORE}/logs",
+)
+# SQLite rebuilds its shared-memory index (-shm) on open; it is machine-local and comes and goes while Hermes runs.
+EXCLUDE_GLOBS = ("*.lock", "*.pid", "*-shm")
+
+
+def excluded(rel: PurePosixPath | Path | str) -> bool:
+    """True for paths under EXCLUDE_DIRS or matching EXCLUDE_GLOBS (compared case-insensitively)."""
+    p = PurePosixPath(str(rel).replace("\\", "/"))
+    low = p.as_posix().casefold()
+    if any(low == d or low.startswith(d + "/") for d in EXCLUDE_DIRS):
+        return True
+    return any(fnmatch.fnmatch(p.name.casefold(), g) for g in EXCLUDE_GLOBS)
 
 
 def _skip(rel: Path) -> bool:
-    """Keys, state and an interrupted import's staging dir are never story."""
-    return rel.parts[0] in _NOT_STORY or rel.parts[0].startswith(STAGING_PREFIX)
+    """Keys, state, an interrupted import's staging dir and EXCLUDE are never story."""
+    return rel.parts[0] in _NOT_STORY or rel.parts[0].startswith(STAGING_PREFIX) or excluded(rel.as_posix())
 
 
 class Home:
@@ -32,6 +56,15 @@ class Home:
     @property
     def config_dir(self) -> Path:
         return self.root / "config"
+
+    @property
+    def hermes_dir(self) -> Path:
+        return self.root / HERMES
+
+    @property
+    def agent_memory_dir(self) -> Path:
+        """Where Hermes' memory provider keeps the memories (``memory/`` is for memories added outside Hermes)."""
+        return self.root / AGENT_STORE / "memory"
 
     @property
     def keys_dir(self) -> Path:

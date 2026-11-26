@@ -21,7 +21,8 @@ NOTICE = (
 
 def plan_reset(home: Home, *, keep_settings: bool) -> list[str]:
     wipe = ("memory", "journal.md") if keep_settings else ("memory", "journal.md", "soul", "config")
-    return [str(p) for p in home.story_paths() if p.parts[0] in wipe]
+    agent_mem = home.agent_memory_dir.relative_to(home.root).as_posix() + "/"
+    return [str(p) for p in home.story_paths() if p.parts[0] in wipe or p.as_posix().startswith(agent_mem)]
 
 
 def reset(home: Home, *, keep_settings: bool, export_to: Path | None) -> dict:
@@ -34,7 +35,7 @@ def reset(home: Home, *, keep_settings: bool, export_to: Path | None) -> dict:
         for idx in home.root.rglob("index.db*"):
             if idx.relative_to(home.root).parts[0] not in ("keys", "state") and (idx.is_file() or idx.is_symlink()):
                 idx.unlink()
-    for d in (home.memory_dir, home.soul_dir, home.config_dir):
+    for d in (home.memory_dir, home.agent_memory_dir, home.soul_dir, home.config_dir):
         if d.is_dir():
             for sub in sorted((p for p in d.rglob("*") if p.is_dir()), reverse=True):
                 if not any(sub.iterdir()):
