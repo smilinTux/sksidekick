@@ -94,3 +94,23 @@ def test_suggested_commands_are_full_quoted_paths():
                     assert f'\\"$app/bin/{cmd.split()[0]}\\"' in line, line
     wrapper = (PKG / "sksidekick-setup.sh").read_text()
     assert 'run \\"$app/bin/sksidekick-setup\\" again' in wrapper
+
+
+def test_wrapper_forwards_invite_flags(tmp_path):
+    import subprocess
+
+    w, app, home = _rendered_wrapper(tmp_path)
+    (app / "bin" / "sksidekick").write_text('#!/bin/sh\nprintf "%s|" "$@"; echo\n')  # the wrapper reads lines
+    for args, extra in ((["--invite", "/x y/inv.json"], ["--invite", "/x y/inv.json"]),
+                        (["--invite", "/x y/inv.json", "--keep-invite"], ["--invite", "/x y/inv.json", "--keep-invite"])):
+        r = subprocess.run(["bash", str(w), *args], capture_output=True, text=True, timeout=30)
+        got = r.stdout.strip().splitlines()[-1].split("|")[:-1]
+        assert r.returncode == 0, r.stderr
+        assert got[:3] == ["--home", str(home), "setup"] and got[-len(extra):] == extra, got
+    # a live home still takes an invite (a rotation)
+    (home / "state").mkdir(parents=True)
+    (home / "state" / "instance.json").write_text("{}")
+    r = subprocess.run(["bash", str(w), "--invite", "/i.json"], capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0 and "--invite|/i.json|" in r.stdout and "already set up" not in r.stdout
+    r = subprocess.run(["bash", str(w), "--keep-invite"], capture_output=True, text=True, timeout=30)
+    assert r.returncode == 2 and "--invite" in r.stderr

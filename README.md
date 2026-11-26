@@ -71,7 +71,8 @@ Archives use an open format built from tar and [age](https://age-encryption.org)
 
 A seat lets one person use a shared model gateway from their sidekick, with a credential the operator
 issues and can revoke. The operator sees usage per pseudonymous client id, never content. The person's
-sidekick takes the invite with `sksidekick setup --invite FILE`. See [docs/SEATS.md](docs/SEATS.md) for the
+sidekick takes the invite at setup: `sksidekick-setup --invite FILE` on a Mac or Linux install, or a mounted
+file named by `SKSIDEKICK_INVITE` in a container. See [docs/SEATS.md](docs/SEATS.md) for the
 operator's runbook (`sksidekick-seat`).
 
 ## Development

@@ -12,6 +12,7 @@ import secrets
 import shlex
 import shutil
 import signal
+import subprocess
 import sys
 import threading
 from http import HTTPStatus
@@ -299,6 +300,57 @@ def _stage_invite(home: Home, path: str, keep: bool) -> None:
     seat.stage(home, invite, path, keep)
 
 
+def _rotate_invite(home: Home, path: str, keep: bool) -> int:
+    """A live sidekick takes a new invite only for the seat it already has (same client id): a rotation."""
+    from sksidekick.seats.record import Invite
+    from sksidekick.setup import hermes_config, seat
+
+    not_used = "an invite was given, but this sidekick is already set up; the invite was not used"
+    try:
+        lock = start_over.hold(home, exclusive=False)
+    except start_over.NoLock:
+        lock = -1
+    if lock is None:
+        print(f"{home.root} is being changed by another command; try again when it has finished", file=sys.stderr)
+        return 1
+    try:
+        try:
+            invite = Invite.from_json(Path(path).read_text())
+        except OSError:
+            print(f"could not read the invite file {path}; {not_used.split('; ')[1]}", file=sys.stderr)
+            return 1
+        except ValueError as e:
+            print(f"the invite file {path} was not used ({e})", file=sys.stderr)
+            return 1
+        current = seat.load(home)
+        if current is None or current.client_id != invite.client_id:
+            print(not_used, file=sys.stderr)
+            return 1
+        if seat.expired(invite):
+            print(f"the invite file {path} was not used ({tier.REVOKED}); it was left in place", file=sys.stderr)
+            return 1
+        model = tier.DEFAULT_SHARED_MODEL
+        try:
+            r = subprocess.run(["hermes", "config", "get", "model.default"], capture_output=True, text=True,
+                               timeout=60, env={**os.environ, "HERMES_HOME": str(home.hermes_dir)})
+            if r.returncode == 0 and r.stdout.strip():
+                model = r.stdout.strip()
+            seat.rotate(home, invite, model)
+        except (hermes_config.HermesError, ValueError, OSError, subprocess.SubprocessError):
+            print("the new invite could not be applied; the sidekick keeps its old credential", file=sys.stderr)
+            return 1
+        if not keep:
+            try:
+                os.unlink(path)
+            except OSError:
+                print(f"the new invite was applied but {path} could not be removed; delete it", file=sys.stderr)
+        print("the new invite was applied; restart the sidekick if it is running (it reads the credential when it starts)")
+        return 0
+    finally:
+        if lock not in (None, -1):
+            os.close(lock)
+
+
 def main_setup(home: Home, host: str = "127.0.0.1", port: int = 8765, invite: str | None = None,
                keep_invite: bool = False) -> int:
     inst = home.state_dir / "instance.json"
@@ -306,7 +358,7 @@ def main_setup(home: Home, host: str = "127.0.0.1", port: int = 8765, invite: st
     if (inst.exists() and not setup.exists()) or (setup.exists() and state.is_complete(home)):
         print(f"{home.root} is already set up", file=sys.stderr)
         if invite:
-            print("an invite was given, but this sidekick is already set up; the invite was not used", file=sys.stderr)
+            return _rotate_invite(home, invite, keep_invite)
         return 1
     # Held (shared) while this server runs: `setup --start-over` needs the home to itself.
     try:

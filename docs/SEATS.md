@@ -126,12 +126,10 @@ docker run -d --name sidekick -v sidekick-data:/opt/data -v /path/to/invite.json
 Setup runs in the container and its page is on the setup port. A missing or bad invite file is one line in
 the container log.
 
-**Mac and Linux installer.** The `sksidekick-setup` wrapper does not take `--invite` today. Run the same
-command it runs, with the invite added. `$APP` is the install folder and `$SIDEKICK_HOME` is the sidekick's
-home (both are printed by the installer):
+**Mac and Linux installer.** Run the setup wrapper with the invite:
 
 ```sh
-env SKSIDEKICK_HOME="$SIDEKICK_HOME" SIDEKICK_SEED="$APP/hermes-seed" SIDEKICK_BIN="$APP/sksidekick/bin" SIDEKICK_SKMEMORY_JSON="$APP/skmemory.json" HERMES_HOME="$SIDEKICK_HOME/hermes" "$APP/bin/sksidekick" --home "$SIDEKICK_HOME" setup --port 0 --invite /path/to/invite.json
+sksidekick-setup --invite /path/to/invite.json
 ```
 
 Add `--keep-invite` to keep the file after it is installed. It is a secret, so the default is to delete it.
@@ -166,7 +164,12 @@ sksidekick-seat --seats-dir "$SEATS" --estate "$ESTATE" rotate "$CLIENT_ID" --re
 ```
 
 The person's sidekick stops working with the shared option until they put the new credential in. Send the
-new invite the same way as the first.
+new invite the same way as the first. The person then runs the same command as before with the new file:
+`sksidekick-setup --invite NEW_FILE` on the installer, or `docker exec sidekick sksidekick setup --invite /opt/data/new-invite.json` in a container (copy the file into
+the volume first, for example with `docker cp`). A sidekick that is already set up takes the new invite only
+for the same seat (the same client id); it keeps its model, deletes the file, and the person restarts the
+sidekick so it reads the new credential. An invite for another seat, or an expired one, is refused and the
+file is kept.
 
 ## Remove a seat
 

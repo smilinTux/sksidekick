@@ -357,3 +357,61 @@ def test_real_hermes_takes_the_named_provider(tmp_path):
     hdr = subprocess.run(["hermes", "config", "get", "providers.sidekick-gateway.extra_headers", "--raw"],
                          env=env, capture_output=True, text=True, check=True)
     assert "x-sk-client-id" in hdr.stdout
+
+
+# ---- rotation: a live sidekick with a seat takes a new invite for the same client id ----
+
+def _live_with_seat(tmp_path, fake_hermes, **kw):
+    home = Home(tmp_path / "h")
+    home.new_instance()
+    inv = make_invite(**kw)
+    hermes_config.set_gateway(home, inv, "sk-fancy")
+    seat.write_record(home, inv)
+    return home, inv
+
+
+def _rotated_file(tmp_path, **kw):
+    inv = make_invite(token="tok-NEW-0123456789abcdefghijklmnopqrstuvwxyz", **kw)
+    inv = Invite(inv.gateway_url, inv.agent_id, kw.pop("client_id", None) or inv.client_id, "r2", inv.token,
+                 inv.expires_at)
+    f = tmp_path / "rot.json"
+    f.write_text(inv.to_json())
+    return f, inv
+
+
+def test_rotation_applies_new_credential(tmp_path, fake_hermes, no_server, capsys):
+    home, old = _live_with_seat(tmp_path, fake_hermes)
+    f, new = _rotated_file(tmp_path)
+    assert _cli(tmp_path, f) == 0 and not no_server
+    out = capsys.readouterr()
+    assert new.token not in out.out + out.err and "applied" in out.out and "restart" in out.out
+    got = seat.load(home)
+    assert got.token == new.token and got.credential_revision == "r2"
+    hdrs = json.loads(fake_hermes.get("providers.sidekick-gateway.extra_headers"))
+    assert hdrs["x-sk-credential-revision"] == "r2"
+    assert fake_hermes.get("model.default") == "sk-fancy"
+    assert not f.exists()
+    assert old.token not in (home.hermes_dir / ".env").read_text()
+
+
+def test_rotation_keep_invite(tmp_path, fake_hermes, no_server):
+    _live_with_seat(tmp_path, fake_hermes)
+    f, _ = _rotated_file(tmp_path)
+    assert _cli(tmp_path, f, "--keep-invite") == 0 and f.exists()
+
+
+def test_rotation_other_client_refused(tmp_path, fake_hermes, no_server, capsys):
+    home, old = _live_with_seat(tmp_path, fake_hermes)
+    f = tmp_path / "other.json"
+    f.write_text(Invite(old.gateway_url, "sidekick", "sk-ffffffffffff", "r2", "tok-other-0123456789abcdef", _expiry(30)).to_json())
+    assert _cli(tmp_path, f) == 1
+    assert "invite was not used" in capsys.readouterr().err
+    assert f.exists() and seat.load(home) == old
+
+
+def test_rotation_expired_refused(tmp_path, fake_hermes, no_server, capsys):
+    home, old = _live_with_seat(tmp_path, fake_hermes)
+    f, _ = _rotated_file(tmp_path, days=-1)
+    assert _cli(tmp_path, f) == 1
+    assert "turned off or has expired" in capsys.readouterr().err
+    assert f.exists() and seat.load(home) == old
