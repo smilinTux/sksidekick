@@ -54,6 +54,13 @@ stop_service() {
         rm -f "$unit"
         systemctl --user daemon-reload 2>/dev/null || true
     fi
+    # The service's processes can still be writing into the app folder for a moment after the stop
+    # (launchd's bootout returns before they exit): wait up to 30 s so removing the app does not race them.
+    n=0
+    while [ "$n" -lt 30 ] && pgrep -f "$app/" >/dev/null 2>&1; do
+        sleep 1
+        n=$((n + 1))
+    done
 }
 
 if [ -n "$uninstall" ]; then
@@ -61,7 +68,7 @@ if [ -n "$uninstall" ]; then
     for link in "$HOME/.local/bin/sksidekick" "$HOME/.local/bin/sksidekick-setup"; do
         if [ -L "$link" ] && case "$(readlink "$link")" in "$app"/*) true ;; *) false ;; esac; then rm -f "$link"; fi
     done
-    rm -rf "$app"
+    rm -rf "$app" 2>/dev/null || { sleep 2; rm -rf "$app"; }
     echo "Removed the sksidekick app and its service."
     echo "Your sidekick's data is still here: $home"
     echo "To delete it permanently, install again and run: \"$app/bin/sksidekick\" --home \"$home\" delete --yes"

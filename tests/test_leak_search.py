@@ -16,11 +16,12 @@ def search(*paths: Path, patterns: str = PHRASE + "\n") -> subprocess.CompletedP
                           timeout=30)
 
 
-def test_clean_tree_with_a_socket_and_an_unreadable_file(tmp_path):
+def test_clean_tree_with_a_socket_and_an_unreadable_file(tmp_path, monkeypatch):
     (tmp_path / "a").mkdir()
     (tmp_path / "a" / "notes.txt").write_text("nothing here\n")
     sock = socket.socket(socket.AF_UNIX)
-    sock.bind(str(tmp_path / "a" / "gateway.sock"))  # BSD grep -r exits 2 on this even with -s
+    monkeypatch.chdir(tmp_path / "a")  # a relative name: macOS caps AF_UNIX paths at 104 bytes and its tmp paths are long
+    sock.bind("gateway.sock")  # BSD grep -r exits 2 on this even with -s
     locked = tmp_path / "a" / "locked"
     locked.write_text(PHRASE)
     locked.chmod(0)
