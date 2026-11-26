@@ -21,6 +21,8 @@ def base(tmp_path, estate="a"):
 
 
 def add(tmp_path, owner="Test Person", estate="a", extra=()):
+    if not (tmp_path / "seats" / "seats.json").exists():
+        assert main(base(tmp_path, estate) + ["init"]) == 0
     return main(base(tmp_path, estate) + ["add", "--owner", owner, "--place", "container",
                                           "--gateway-url", URL, "--registry", str(tmp_path / "clients.json"), *extra])
 
@@ -85,8 +87,25 @@ def test_estate_mismatch_refused(tmp_path, capsys, monkeypatch):
     assert "this seats directory belongs to estate a" in capsys.readouterr().err
     monkeypatch.setenv("SKWORLD_ESTATE", "b")
     assert add(tmp_path, estate="a") == 2
-    assert "this seats directory belongs to estate a" in capsys.readouterr().err
+    assert "this host is estate b" in capsys.readouterr().err
     assert len(json.loads((tmp_path / "clients.json").read_text())["credentials"]) == 1
+
+
+def test_host_estate_refused_before_anything_is_written(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("SKWORLD_ESTATE", "a")
+    assert main(base(tmp_path, "b") + ["init"]) == 2
+    assert "this host is estate a" in capsys.readouterr().err
+    assert not (tmp_path / "seats" / "seats.json").exists()
+    assert not (tmp_path / "seats").exists()
+
+
+def test_add_without_init_is_refused(tmp_path, capsys):
+    rc = main(base(tmp_path) + ["add", "--owner", "X", "--place", "linux", "--gateway-url", URL,
+                                "--registry", str(tmp_path / "clients.json")])
+    assert rc == 2
+    assert "run init first" in capsys.readouterr().err
+    assert not (tmp_path / "seats" / "seats.json").exists()
+    assert not (tmp_path / "clients.json").exists()
 
 
 def _worker(argv):

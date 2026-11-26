@@ -53,6 +53,9 @@ def _cmd_export(home: Home, a) -> int:
         print(archive.export(home, Path(a.path), with_credentials=creds))
     if not creds:
         print("Channel logins were left out (add --with-credentials to keep them).")
+        if (home.root / "seat.json").exists():
+            print("The gateway seat credential was left out too. A sidekick restored from this on another "
+                  "machine needs a rotated invite from the operator to use the shared gateway.")
     return 0
 
 

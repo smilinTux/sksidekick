@@ -138,3 +138,15 @@ def test_cli_export_redacts_by_default_and_import_says_log_in_again(capsys, tmp_
     assert code == 0 and "Log in again for: TELEGRAM_BOT_TOKEN" in out
     assert "123:abc" not in (tmp_path / "new/hermes/.env").read_text()
     assert run(capsys, "--home", str(root), "export", "--with-credentials", str(tmp_path / "b.sksk"))[0] == 0
+
+
+def test_cli_export_says_the_seat_credential_was_left_out(capsys, tmp_path: Path):
+    root = tmp_path / "sk"
+    _init(capsys, root)
+    (root / "hermes").mkdir()
+    (root / "hermes/.env").write_text("SKSIDEKICK_GATEWAY_TOKEN=tok\n")
+    (root / "seat.json").write_text("{}")
+    code, out = run(capsys, "--home", str(root), "export", str(tmp_path / "a.sksk"))
+    assert code == 0
+    assert "gateway seat credential was left out" in out
+    assert "rotated invite" in out

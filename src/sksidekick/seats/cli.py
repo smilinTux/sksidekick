@@ -37,7 +37,11 @@ def _credential_revision() -> str:
 
 
 def _open_seats(a, create: bool) -> Seats:
+    """Open the record; only ``init`` (create=True) makes one. Every estate check runs before any write."""
     seats = Seats(Path(a.seats_dir))
+    host = os.environ.get("SKWORLD_ESTATE")
+    if host and host != a.estate:
+        raise SeatError(f"--estate is {a.estate}, but this host is estate {host}")
     if not seats.exists():
         if not create:
             raise SeatError(f"no seats record in {seats.root}; run init first")
@@ -45,9 +49,6 @@ def _open_seats(a, create: bool) -> Seats:
     owner = seats.load()["estate"]
     if owner != a.estate:
         raise SeatError(f"this seats directory belongs to estate {owner}, not {a.estate}")
-    host = os.environ.get("SKWORLD_ESTATE")
-    if host and host != owner:
-        raise SeatError(f"this seats directory belongs to estate {owner}, but this host is estate {host}")
     return seats
 
 
@@ -92,7 +93,7 @@ def _cmd_init(a) -> int:
 
 
 def _cmd_add(a) -> int:
-    seats = _open_seats(a, create=True)
+    seats = _open_seats(a, create=False)
     client_id = new_client_id()
     invite, cred, out = _issue(a, client_id)
     try:
