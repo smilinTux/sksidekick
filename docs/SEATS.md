@@ -19,9 +19,9 @@ what the person gets when they pick the shared option at setup.
 
 ## One-time setup: a sidekick gateway
 
-Run a separate skgateway instance for sidekick seats (release after
-[skgateway PR 222](https://github.com/smilinTux/skgateway/pull/222)). Do not turn client auth on for a gateway
-your own agents already use: every caller of it would then need a credential.
+Run a separate skgateway instance for sidekick seats, on a skgateway release with client auth and
+privacy.content_logs (PR 222). Do not turn client auth on for a gateway your own agents already use: every
+caller of it would then need a credential.
 
 In the instance's `skgateway.yaml`:
 
@@ -57,6 +57,48 @@ evidence_budget_monitoring:
   `http://` address unless the host is loopback or a private address.
 - The gateway rereads the credentials file when it receives SIGHUP. No restart is needed to add or remove a
   seat.
+- The gateway must serve the model name `sk-default` (an alias or a route to the model you pay for). Setup
+  sets the sidekick to that name when the person picks the shared option.
+- Turn off the access log of any reverse proxy in front of the gateway (nginx, Caddy, Traefik), or keep it
+  without the client address. Otherwise the proxy keeps every caller's IP address, which the gateway itself
+  never stores and never passes on to the model provider.
+
+### The operator credential (operators.json)
+
+Run this once as the gateway user, in the directory where you keep the operator's private files. It makes a
+token, writes it only into `operator.headers` (mode 0600, used below to read usage) and writes its SHA-256
+into `operators.json`. The token is never printed, so it never lands in a terminal log:
+
+```sh
+umask 077 && python3 -c '
+import hashlib, json, secrets
+t = secrets.token_urlsafe(32)
+open("operator.headers", "w").write("Authorization: Bearer " + t + "\nx-sk-operator-id: operator\nx-sk-operator-client-id: operator-1\nx-sk-operator-credential-revision: op-r1\n")
+json.dump({"schema_version": 1, "revision": "ops-1", "credentials": [{"agent_id": "operator", "client_id": "operator-1", "token_sha256": hashlib.sha256(t.encode()).hexdigest(), "credential_revision": "op-r1", "revoked": False, "expires_at": "2027-12-31T00:00:00Z"}]}, open("/srv/sidekick-gateway/operators.json", "w"), indent=2)
+'
+```
+
+The resulting `operators.json` has this shape (the hash is the SHA-256 of the token, as hex):
+
+```json
+{
+  "schema_version": 1,
+  "revision": "ops-1",
+  "credentials": [
+    {
+      "agent_id": "operator",
+      "client_id": "operator-1",
+      "token_sha256": "<64 hex characters>",
+      "credential_revision": "op-r1",
+      "revoked": false,
+      "expires_at": "2027-12-31T00:00:00Z"
+    }
+  ]
+}
+```
+
+To replace the operator credential, run the command again with a new `credential_revision` and `revision`,
+then send the gateway SIGHUP.
 
 ## Run it as the gateway user
 
@@ -124,22 +166,32 @@ The person picks the shared option at the model step of setup. The invite is rea
 installed when they save that option. If they pick another option, the file is left alone and not used. A
 sidekick that is already set up does not use an invite.
 
-**Container.** Mount the invite read only and point setup at it:
+**Container.** Mount the invite read only and point setup at it, on the first run of a new container:
 
 ```sh
 docker run -d --name sidekick -v sidekick-data:/opt/data -v /path/to/invite.json:/run/invite:ro -e SKSIDEKICK_INVITE=/run/invite IMAGE
 ```
 
 Setup runs in the container and its page is on the setup port. A missing or bad invite file is one line in
-the container log.
+the container log. Setup cannot delete a read-only mount, so once the shared option is saved, delete the
+invite file on the host yourself and leave out the `-v .../invite.json` and `-e SKSIDEKICK_INVITE` options the
+next time you run the container. A container that is already set up never uses `SKSIDEKICK_INVITE`; it says so
+in one line of its log.
 
-**Mac and Linux installer.** Run the setup wrapper with the invite:
+**Mac and Linux installer.** Give the installer the invite. It passes it to the setup page it starts:
 
 ```sh
-sksidekick-setup --invite /path/to/invite.json
+bash packaging/install.sh --invite /path/to/invite.json
 ```
 
 Add `--keep-invite` to keep the file after it is installed. It is a secret, so the default is to delete it.
+On a computer that already has the app, run the setup wrapper by its full path (`~/.local/bin` is not on a
+default macOS PATH). The installer prints this command when it finishes:
+
+```sh
+"$HOME/Library/Application Support/sksidekick-app/bin/sksidekick-setup" --invite /path/to/invite.json   # macOS
+"${XDG_DATA_HOME:-$HOME/.local/share}/sksidekick-app/bin/sksidekick-setup" --invite /path/to/invite.json   # Linux
+```
 
 A revoked or expired invite is reported at setup as turned off or expired, with a request to ask for a new
 one.
@@ -174,11 +226,17 @@ sksidekick-seat --seats-dir "$SEATS" --estate "$ESTATE" rotate "$CLIENT_ID" --re
 
 The person's sidekick stops working with the shared option until they put the new credential in. Send the
 new invite the same way as the first. The person then runs the same command as before with the new file:
-`sksidekick-setup --invite NEW_FILE` on the installer, or `docker exec sidekick sksidekick setup --invite /opt/data/new-invite.json` in a container (copy the file into
+the setup wrapper by its full path with `--invite NEW_FILE` on the installer (see above), or
+`docker exec sidekick sksidekick setup --invite /opt/data/new-invite.json` in a container (copy the file into
 the volume first, for example with `docker cp`). A sidekick that is already set up takes the new invite only
-for the same seat (the same client id); it keeps its model, deletes the file, and the person restarts the
-sidekick so it reads the new credential. An invite for another seat, or an expired one, is refused and the
-file is kept.
+for the same seat (the same client id); it keeps its model and deletes the file. Then the person restarts the
+sidekick so it reads the new credential. Setup prints the command for where it runs:
+
+- macOS: `launchctl kickstart -k gui/$(id -u)/io.skworld.sksidekick`
+- Linux: `systemctl --user restart sksidekick`
+- Container: `docker restart sidekick` (on the host)
+
+An invite for another seat, or an expired one, is refused and the file is kept.
 
 ## Remove a seat
 
@@ -186,8 +244,11 @@ file is kept.
 sksidekick-seat --seats-dir "$SEATS" --estate "$ESTATE" remove "$CLIENT_ID" --registry "$REGISTRY"
 ```
 
-This revokes the credential and marks the seat removed in the record. The sidekick keeps working on any
-other model option the person has. The operator cannot reach into it. Tell the person to keep their story
+This revokes the credential and marks the seat removed in the record. From then on the sidekick stops
+answering: every turn fails at the gateway with a refused credential, and Hermes tells the person to run
+`hermes setup`. That message is not the way back (a known follow-up). The sidekick answers again only when the
+person gets a new seat from an operator, or starts setup over and picks another model option. The operator
+cannot reach into it. Tell the person to keep their story
 first, then delete it if they want it gone:
 
 ```sh
@@ -205,5 +266,5 @@ docker rm -f sidekick
 docker volume rm sidekick-data
 ```
 
-Give the person the archive and their recovery phrase before you remove the volume. Without the phrase the
-archive cannot be opened.
+Give the person the archive, and make sure the person has their recovery phrase, before you remove the
+volume. You never had the phrase, and without it the archive cannot be opened.
