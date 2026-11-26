@@ -64,12 +64,14 @@
 
   async function send(path, data, errorFallback) {
     let r;
+    say("Saving. The first save on a new computer can take a minute.");
     try {
       r = await post(path, data);
     } catch (e) {
       show("gone");
       return null;
     }
+    say("");
     if (r.ok) return r;
     if (r.status === 403) { token = ""; store(TOKEN_KEY, ""); show("lost"); return null; }
     if (r.status === 409) {

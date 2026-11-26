@@ -16,12 +16,16 @@ class HermesError(RuntimeError):
     """`hermes` could not be run or refused a setting. The message never carries command output."""
 
 
+# Hermes' first run on a fresh install (a cold macOS machine) can take over a minute: CI saw 60 s run out.
+CONFIG_SET_TIMEOUT = 300
+
+
 def config_set(home: Home, key: str, value: str) -> None:
     env = {**os.environ, "HERMES_HOME": str(home.hermes_dir)}
     try:
         subprocess.run(
             ["hermes", "config", "set", key, value],
-            env=env, check=True, capture_output=True, timeout=60,
+            env=env, check=True, capture_output=True, timeout=CONFIG_SET_TIMEOUT,
         )
     except (OSError, subprocess.SubprocessError):
         raise HermesError(f"could not run `hermes config set {key}`") from None
