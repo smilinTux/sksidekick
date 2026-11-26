@@ -67,6 +67,13 @@ Every command needs `--home PATH` or `SKSIDEKICK_HOME` (there is no default home
 Archives use an open format built from tar and [age](https://age-encryption.org): see
 [docs/ARCHIVE_FORMAT.md](docs/ARCHIVE_FORMAT.md), including how to open one with stock tools.
 
+## Seats
+
+A seat lets one person use a shared model gateway from their sidekick, with a credential the operator
+issues and can revoke. The operator sees usage per pseudonymous client id, never content. The person's
+sidekick takes the invite with `sksidekick setup --invite FILE`. See [docs/SEATS.md](docs/SEATS.md) for the
+operator's runbook (`sksidekick-seat`).
+
 ## Development
 
 ```sh
