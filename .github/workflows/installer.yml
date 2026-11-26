@@ -20,5 +20,5 @@ jobs:
           echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
           for _ in $(seq 30); do [ -S "/run/user/$(id -u)/bus" ] && break; sleep 1; done
           XDG_RUNTIME_DIR="/run/user/$(id -u)" systemctl --user is-system-running || true
-      - name: Install, check, uninstall
+      - name: Install, set up through the page (--setup-headless), check, uninstall
         run: bash tests/installer/test_installer.sh

@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Plain sksidekick install for macOS and Linux (no container):
-#   install.sh [--home PATH] [--no-init] [--uninstall] [--force-hermes-link]
+#   install.sh [--home PATH] [--no-init | --init | --setup-headless] [--uninstall] [--force-hermes-link]
+#   default: start the setup page and open it in your browser (the recovery phrase is shown there, once).
+#   --setup-headless: print the setup page's address instead of opening a browser.
+#   --init: no page; create the sidekick in this terminal (`sksidekick init`, phrase printed here).
 #   --no-init: leave the home empty for `sksidekick import` (moving here); the service waits for it.
 # Code goes in the app folder; the sidekick's data (its home) goes elsewhere and is never removed here.
 set -eu
@@ -28,13 +31,16 @@ esac
 uninstall=""
 force_link=""
 no_init=""
+mode="browser"
 while [ $# -gt 0 ]; do
     case "$1" in
         --home) [ $# -ge 2 ] || die "--home needs a path"; home="$2"; shift 2 ;;
         --uninstall) uninstall=1; shift ;;
         --no-init) no_init=1; shift ;;
+        --init) mode="init"; shift ;;
+        --setup-headless) mode="headless"; shift ;;
         --force-hermes-link) force_link=1; shift ;;
-        -h|--help) sed -n 2,5p "$0"; exit 0 ;;
+        -h|--help) sed -n 2,9p "$0"; exit 0 ;;
         *) die "unknown option: $1" ;;
     esac
 done
@@ -48,17 +54,24 @@ stop_service() {
         rm -f "$unit"
         systemctl --user daemon-reload 2>/dev/null || true
     fi
+    # The service's processes can still be writing into the app folder for a moment after the stop
+    # (launchd's bootout returns before they exit): wait up to 30 s so removing the app does not race them.
+    n=0
+    while [ "$n" -lt 30 ] && pgrep -f "$app/" >/dev/null 2>&1; do
+        sleep 1
+        n=$((n + 1))
+    done
 }
 
 if [ -n "$uninstall" ]; then
     stop_service
-    for link in "$HOME/.local/bin/sksidekick"; do
+    for link in "$HOME/.local/bin/sksidekick" "$HOME/.local/bin/sksidekick-setup"; do
         if [ -L "$link" ] && case "$(readlink "$link")" in "$app"/*) true ;; *) false ;; esac; then rm -f "$link"; fi
     done
-    rm -rf "$app"
+    rm -rf "$app" 2>/dev/null || { sleep 2; rm -rf "$app"; }
     echo "Removed the sksidekick app and its service."
     echo "Your sidekick's data is still here: $home"
-    echo "To delete it permanently: sksidekick --home \"$home\" delete --yes"
+    echo "To delete it permanently, install again and run: \"$app/bin/sksidekick\" --home \"$home\" delete --yes"
     exit 0
 fi
 
@@ -108,17 +121,24 @@ say "sksidekick"
 "$uv" pip install -q --python "$app/sksidekick/bin/python" "$repo"
 ln -sf "$app/sksidekick/bin/sksidekick" "$app/bin/sksidekick"
 install -m 0755 "$here/sidekick-start.sh" "$app/bin/sidekick-start"
+render() { sed -e "s|@APP@|$app|g" -e "s|@HOME@|$home|g" "$1"; }
+# The setup page with the service's environment; also the way back in after a stopped setup.
+render "$here/sksidekick-setup.sh" > "$app/bin/sksidekick-setup"
+chmod 0755 "$app/bin/sksidekick-setup"
 mkdir -p "$HOME/.local/bin"
 ln -sf "$app/bin/sksidekick" "$HOME/.local/bin/sksidekick"
+ln -sf "$app/bin/sksidekick-setup" "$HOME/.local/bin/sksidekick-setup"
 
 if [ -n "$no_init" ]; then
-    say "No sidekick created. Import yours: sksidekick --home \"$home\" import ARCHIVE --phrase-stdin"
-elif [ ! -f "$home/state/instance.json" ]; then
+    say "No sidekick created. Import yours: \"$app/bin/sksidekick\" --home \"$home\" import ARCHIVE --phrase-stdin"
+elif [ "$mode" = init ] && [ ! -f "$home/state/instance.json" ]; then
     say "Creating your sidekick in $home"
-    "$app/bin/sksidekick" --home "$home" init
+    "$app/bin/sksidekick" --home "$home" init || die "could not create the sidekick in $home (a setup that stopped half way leaves files there). Go on with that setup: \"$app/bin/sksidekick-setup\"; or throw it away with \"$app/bin/sksidekick-setup\" --start-over, then run install.sh --init again."
 fi
 
-render() { sed -e "s|@APP@|$app|g" -e "s|@HOME@|$home|g" "$1"; }
+# The service runs with SKSIDEKICK_SETUP=off: setup is started below, in this terminal, never by the
+# service too (one setup server, one port). The service's start script waits for instance.json, so it
+# only starts serving once setup (or init, or import) has made the sidekick.
 say "Service"
 if [ "$(uname -s)" = Darwin ]; then
     mkdir -p "$(dirname "$plist")"
@@ -131,5 +151,15 @@ else
     systemctl --user daemon-reload
     systemctl --user enable --now sksidekick.service
 fi
+
+if [ -z "$no_init" ] && [ "$mode" != init ] && [ ! -f "$home/state/instance.json" ]; then
+    say "Setup page: choose the model, channels and personality, and write down your recovery phrase"
+    flag=""
+    [ "$mode" = headless ] && flag="--headless"
+    rc=0
+    "$app/bin/sksidekick-setup" $flag || rc=$?
+    [ "$rc" = 0 ] || die "setup stopped (exit $rc). Run \"$app/bin/sksidekick-setup\" to go on where it stopped (add --start-over to begin again), or run install.sh again."
+fi
+
 echo "Done. Your sidekick's home: $home"
-echo "Check it any time with: sksidekick --home \"$home\" status"
+echo "Check it any time with: \"$app/bin/sksidekick\" --home \"$home\" status"

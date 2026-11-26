@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<title>Set up your sidekick</title>
+<link rel="stylesheet" href="static/setup.css">
+<script src="static/setup.js" defer></script>
+</head>
+<body>
+<header>
+  <h1>Set up your sidekick</h1>
+  <p class="lede">Nothing leaves this computer during setup, except one check that the model address you enter answers.</p>
+  <ol id="progress" class="progress" aria-label="Setup steps">
+    <li data-step="tier">Model</li>
+    <li data-step="channels">Channels</li>
+    <li data-step="personality">Personality</li>
+    <li data-step="phrase">Recovery phrase</li>
+    <li data-step="backup">Backups</li>
+  </ol>
+</header>
+
+<main>
+<p id="status-msg" class="status" role="status" aria-live="polite" hidden></p>
+
+<section id="s-loading" class="screen" aria-labelledby="h-loading">
+  <h2 id="h-loading" tabindex="-1">Loading</h2>
+  <p>One moment.</p>
+</section>
+
+<section id="s-lost" class="screen" aria-labelledby="h-lost" hidden>
+  <h2 id="h-lost" tabindex="-1">This page needs its setup key</h2>
+  <p>For safety the key is kept only in the browser tab that opened the setup address, so a new tab or
+     window does not have it, and each start of setup makes a new key.
+     Open the address that setup printed again: it is in the terminal where setup started,
+     or in <code>docker logs</code> for a container. It ends with <code>?t=</code> and the key.</p>
+</section>
+
+<section id="s-gone" class="screen" aria-labelledby="h-gone" hidden>
+  <h2 id="h-gone" tabindex="-1">Setup is not answering</h2>
+  <p>If you just finished, setup has closed and your sidekick is starting; you can close this tab.
+     Otherwise start setup again and open the new address it prints.</p>
+</section>
+
+<section id="s-tier" class="screen" aria-labelledby="h-tier" hidden>
+  <h2 id="h-tier" tabindex="-1">Where your sidekick's model runs</h2>
+  <p id="tier-done" class="done-note" hidden>This step is done.</p>
+  <form id="form-tier" novalidate>
+    <fieldset id="tier-set">
+      <legend>Choose one</legend>
+      <div id="tier-options" class="options"></div>
+      <p id="err-tier" class="error" role="alert" hidden></p>
+      <div id="row-base_url" class="row" hidden>
+        <label for="f-base_url">Model address</label>
+        <input id="f-base_url" name="base_url" type="url" autocomplete="off" spellcheck="false"
+               placeholder="http://127.0.0.1:11434/v1" data-placeholder-container="http://host.docker.internal:11434/v1"
+               aria-describedby="hint-base_url hint-base_url-container err-base_url">
+        <p id="hint-base_url" class="hint">An OpenAI compatible address. For Ollama on this computer it is usually the example shown.</p>
+        <p id="hint-base_url-container" class="hint" hidden>Setup runs in a container here, where 127.0.0.1 is the container
+           itself. For Ollama on this computer use the example shown, and start Ollama with
+           <code>OLLAMA_HOST=0.0.0.0</code> so it listens beyond loopback (your firewall then decides who else
+           reaches it). On Linux, start the container with <code>--add-host=host.docker.internal:host-gateway</code>.</p>
+        <p id="err-base_url" class="error" role="alert" hidden></p>
+      </div>
+      <div id="row-model" class="row" hidden>
+        <label for="f-model">Model name</label>
+        <input id="f-model" name="model" type="text" autocomplete="off" spellcheck="false" aria-describedby="err-model">
+        <p id="err-model" class="error" role="alert" hidden></p>
+      </div>
+      <div id="row-api_key" class="row" hidden>
+        <label for="f-api_key">API key</label>
+        <input id="f-api_key" name="api_key" type="password" autocomplete="off" spellcheck="false" aria-describedby="err-api_key">
+        <p id="err-api_key" class="error" role="alert" hidden></p>
+      </div>
+    </fieldset>
+    <div class="actions">
+      <button type="submit" class="primary">Check and continue</button>
+      <button type="button" class="next" hidden>Next</button>
+    </div>
+  </form>
+</section>
+
+<section id="s-channels" class="screen" aria-labelledby="h-channels" hidden>
+  <h2 id="h-channels" tabindex="-1">Where you talk to it</h2>
+  <p id="channels-done" class="done-note" hidden>This step is done.</p>
+  <form id="form-channels" novalidate>
+    <fieldset id="channels-set">
+      <legend>Pick any, or none</legend>
+      <p class="hint">Add more channels later. With none, your sidekick answers only here on this computer.</p>
+      <div id="channel-list" class="options"></div>
+      <p id="err-channels" class="error" role="alert" hidden></p>
+    </fieldset>
+    <div class="actions">
+      <button type="button" class="back">Back</button>
+      <button type="submit" class="primary">Continue</button>
+      <button type="button" class="next" hidden>Next</button>
+    </div>
+  </form>
+</section>
+
+<section id="s-personality" class="screen" aria-labelledby="h-personality" hidden>
+  <h2 id="h-personality" tabindex="-1">Its personality and voice</h2>
+  <p id="personality-done" class="done-note" hidden>This step is done.</p>
+  <form id="form-personality" novalidate>
+    <fieldset id="personality-set">
+      <legend>Personality</legend>
+      <p class="hint">The style sets tone and pace only. It never changes what your sidekick is allowed to do.</p>
+      <div id="personality-list" class="options"></div>
+      <p id="err-personality" class="error" role="alert" hidden></p>
+    </fieldset>
+    <fieldset id="voice-set">
+      <legend>Voice</legend>
+      <div class="options inline">
+        <label class="choice"><input id="voice-female" type="radio" name="voice" value="female"> Female voice</label>
+        <label class="choice"><input id="voice-male" type="radio" name="voice" value="male"> Male voice</label>
+      </div>
+      <p id="err-voice" class="error" role="alert" hidden></p>
+    </fieldset>
+    <div class="actions">
+      <button type="button" class="back">Back</button>
+      <button type="submit" class="primary">Continue</button>
+      <button type="button" class="next" hidden>Next</button>
+    </div>
+  </form>
+</section>
+
+<section id="s-phrase" class="screen" aria-labelledby="h-phrase" hidden>
+  <h2 id="h-phrase" tabindex="-1">Your recovery phrase</h2>
+  <p id="phrase-done" class="done-note" hidden>This step is done. The phrase is not shown again.</p>
+
+  <div id="phrase-start">
+    <p>Next you see your recovery phrase, once. Make sure nobody else can see your screen,
+       and have paper and a pen ready.</p>
+    <p id="err-phrase" class="error" role="alert" hidden></p>
+    <div class="actions">
+      <button type="button" class="back">Back</button>
+      <button type="button" id="btn-phrase-show" class="primary">Show my recovery phrase</button>
+    </div>
+  </div>
+
+  <div id="phrase-show" hidden>
+    <p class="important">Write these 8 groups down on paper. This is the only way to restore your sidekick if this computer is lost. We cannot recover it for you.</p>
+    <ol id="phrase-groups" class="groups" aria-label="Recovery phrase, 8 groups"></ol>
+    <div class="actions">
+      <button type="button" id="btn-phrase-written" class="primary">I wrote it down</button>
+    </div>
+  </div>
+
+  <form id="phrase-confirm" novalidate hidden>
+    <p>Type two of the groups from your paper, to show the phrase is written down correctly.</p>
+    <div class="row">
+      <label id="lbl-g1" for="f-g1">Group</label>
+      <input id="f-g1" class="group-input" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="12" aria-describedby="err-groups">
+    </div>
+    <div class="row">
+      <label id="lbl-g2" for="f-g2">Group</label>
+      <input id="f-g2" class="group-input" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="12" aria-describedby="err-groups">
+    </div>
+    <p id="err-groups" class="error" role="alert" hidden></p>
+    <div class="actions">
+      <button type="button" id="btn-phrase-again">Show the groups again</button>
+      <button type="submit" class="primary">Confirm</button>
+    </div>
+  </form>
+
+  <div id="phrase-next" class="actions" hidden>
+    <button type="button" class="back">Back</button>
+    <button type="button" class="next">Next</button>
+  </div>
+</section>
+
+<section id="s-backup" class="screen" aria-labelledby="h-backup" hidden>
+  <h2 id="h-backup" tabindex="-1">Where backups go</h2>
+  <p id="backup-done" class="done-note" hidden>This step is done.</p>
+  <form id="form-backup" novalidate>
+    <fieldset id="backup-set">
+      <legend>Choose one</legend>
+      <p class="hint">Backups are encrypted with your key before they leave the sidekick.</p>
+      <div class="options">
+        <label class="choice"><input id="kind-dir" type="radio" name="kind" value="dir"> A folder (on this computer or a drive)</label>
+        <div id="row-dir" class="row sub" hidden>
+          <label for="f-dir">Full path of the folder</label>
+          <input id="f-dir" type="text" autocomplete="off" spellcheck="false" placeholder="/media/usb/sidekick"
+                 data-placeholder-mac="/Volumes/USB/sidekick" data-placeholder-container="/backups" aria-describedby="hint-dir hint-dir-container err-target">
+          <p id="hint-dir" class="hint">A folder outside the sidekick's own home, best on another drive.</p>
+          <p id="hint-dir-container" class="hint" hidden>Setup runs in a container here, and a folder inside it is lost
+             with the container's data. Start the container with a folder of this computer mounted, for example
+             <code>-v ~/sidekick-backups:/backups</code>, and enter <code>/backups</code>.</p>
+        </div>
+        <label class="choice"><input id="kind-rclone" type="radio" name="kind" value="rclone"> An rclone remote</label>
+        <div id="row-rclone" class="row sub" hidden>
+          <label for="f-rclone">Remote, as name:path</label>
+          <input id="f-rclone" type="text" autocomplete="off" spellcheck="false" placeholder="mydrive:sidekick" aria-describedby="err-target">
+        </div>
+        <label class="choice"><input id="kind-later" type="radio" name="kind" value="later"> Later</label>
+        <p id="backup-later-note" class="hint" hidden></p>
+      </div>
+      <p id="err-target" class="error" role="alert" hidden></p>
+      <p id="err-kind" class="error" role="alert" hidden></p>
+    </fieldset>
+    <div class="actions">
+      <button type="button" class="back">Back</button>
+      <button type="submit" class="primary">Finish setup</button>
+    </div>
+  </form>
+</section>
+
+<section id="s-done" class="screen" aria-labelledby="h-done" hidden>
+  <h2 id="h-done" tabindex="-1">Your sidekick is set up</h2>
+  <p>It starts on its own now. Setup has closed, so you can close this tab.</p>
+  <p id="done-next"></p>
+  <p id="done-command" hidden><code id="done-command-text"></code></p>
+  <p id="done-warning" class="important" hidden></p>
+</section>
+</main>
+</body>
+</html>

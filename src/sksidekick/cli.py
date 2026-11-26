@@ -146,6 +146,19 @@ def _cmd_serve(home: Home, a) -> int:
     return serve.main_serve(home, a.gateway or None)
 
 
+def _cmd_setup(home: Home, a) -> int:
+    if a.start_over:
+        from sksidekick.setup import start_over
+
+        return start_over.start_over(home, yes=a.yes)
+    if a.yes:
+        print("--yes goes with --start-over", file=sys.stderr)
+        return 2
+    from sksidekick.setup import server
+
+    return server.main_setup(home, a.host, a.port)
+
+
 def _cmd_status(home: Home, a) -> int:
     _print({"home": str(home.root), "instance": home.instance(), "backup": backup.status(home), "drill": drill.last_drill(home)})
     return 0
@@ -195,6 +208,13 @@ def _parser() -> argparse.ArgumentParser:
     s = sub.add_parser("serve", help="run the gateway while this copy is live; backups and drills on schedule")
     s.add_argument("gateway", nargs=argparse.REMAINDER, help="gateway command (default: hermes gateway run)")
     s.set_defaults(fn=_cmd_serve)
+    u = sub.add_parser("setup", help="first-run setup page in your browser (loopback only by default)")
+    u.add_argument("--host", default="127.0.0.1")
+    u.add_argument("--port", type=int, default=8765)
+    u.add_argument("--start-over", action="store_true",
+                   help="throw away an unfinished setup (keys, settings, progress) so it can begin again; never a live sidekick")
+    u.add_argument("--yes", action="store_true", help="with --start-over: do not ask first")
+    u.set_defaults(fn=_cmd_setup)
     return p
 
 

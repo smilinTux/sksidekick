@@ -1,0 +1,480 @@
+from __future__ import annotations
+
+import json
+import os
+import re
+import threading
+import time
+from pathlib import Path
+
+import pytest
+
+from sksidekick import backup, keys, serve
+from sksidekick.home import Home
+from sksidekick.setup import backup_step, phrase, server, state
+from test_setup_server import TOKEN, call
+
+
+def post(port, path, body=None, tok=TOKEN):
+    status, headers, data = call(port, "POST", path, body, cookie=tok, header=tok)
+    return status, json.loads(data), headers, data
+
+
+def at_phrase(home: Home) -> None:
+    for s in ("tier", "channels", "personality"):
+        state.advance(home, s)
+
+
+def confirm_body(p: str, check: list[int], lower=True) -> dict:
+    groups = p.split("-")
+    typed = {str(i): (groups[i].lower().replace("0", "o") if lower else groups[i]) for i in check}
+    return {"groups": typed}
+
+
+def wait_for(cond, seconds=5.0) -> bool:
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        if cond():
+            return True
+        time.sleep(0.02)
+    return cond()
+
+
+def key_files(home: Home) -> list[str]:
+    return sorted(p.name for p in home.keys_dir.iterdir()) if home.keys_dir.is_dir() else []
+
+
+class Setup:
+    """main_setup in a thread, with its server object at hand so a test can stop it."""
+
+    def __init__(self, home: Home, monkeypatch, capsys) -> None:
+        self.home, self.rc, made = home, {}, {}
+        real = server.make_server
+
+        def make(*a, **k):
+            made["srv"] = real(*a, **k)
+            return made["srv"]
+
+        monkeypatch.setattr(server, "make_server", make)
+        self.t = threading.Thread(target=lambda: self.rc.setdefault("rc", server.main_setup(home, "127.0.0.1", 0)))
+        self.t.start()
+        m = None
+        for _ in range(200):
+            m = re.search(r"Open http://127\.0\.0\.1:(\d+)/\?t=(\S+)", capsys.readouterr().out)
+            if m:
+                break
+            time.sleep(0.02)
+        assert m, "setup server did not start"
+        self.port, self.tok, self.srv = int(m.group(1)), m.group(2), made["srv"]
+
+    def stop(self) -> None:
+        self.srv.shutdown()
+        self.t.join(5)
+
+
+@pytest.fixture
+def at_phrase_running(running):
+    home, port = running
+    at_phrase(home)
+    yield home, port
+    phrase.on_stop(home)
+
+
+def test_phrase_shown_once(at_phrase_running, capfd, tmp_path):
+    home, port = at_phrase_running
+    status, out, headers, raw = post(port, "/api/phrase/new")
+    assert status == 200 and headers["Cache-Control"] == "no-store"
+    p, check = out["phrase"], out["check"]
+    assert re.fullmatch(r"([0-9A-HJKMNP-TV-Z]{5}-){7}[0-9A-HJKMNP-TV-Z]{5}", p)
+    assert len(check) == 2 and len(set(check)) == 2 and all(0 <= i < 8 for i in check)
+    secrets_ = [p.encode(), p.replace("-", "").encode(), *(g.encode() for g in p.split("-"))]
+    _, _, st = call(port, "GET", "/api/state", cookie=TOKEN)
+    assert not any(s in st for s in secrets_)
+    status, _, _, raw2 = post(port, "/api/phrase/confirm", confirm_body(p, check))
+    assert status == 200 and not any(s in raw2 for s in secrets_)
+    _, _, st = call(port, "GET", "/api/state", cookie=TOKEN)
+    assert not any(s in st for s in secrets_)
+    captured = capfd.readouterr()
+    assert not any(s.decode() in captured.out + captured.err for s in secrets_)
+    for f in tmp_path.rglob("*"):
+        if f.is_file():
+            data = f.read_bytes()
+            assert not any(s in data for s in secrets_), f
+    assert state.load(home)["next"] == "backup"
+
+
+def test_refresh_makes_a_new_phrase(at_phrase_running):
+    home, port = at_phrase_running
+    first = post(port, "/api/phrase/new")[1]["phrase"]
+    second = post(port, "/api/phrase/new")[1]["phrase"]
+    assert first != second
+    wrapped = (home.keys_dir / keys.WRAPPED).read_bytes()
+    assert keys.unwrap_identity(wrapped, second)
+    with pytest.raises(keys.WrongPhrase):
+        keys.unwrap_identity(wrapped, first)
+
+
+def test_unconfirmed_keys_shredded_on_stop(bare_home, monkeypatch, capsys):
+    at_phrase(bare_home)
+    s = Setup(bare_home, monkeypatch, capsys)
+    assert post(s.port, "/api/phrase/new", tok=s.tok)[0] == 200
+    assert key_files(bare_home)
+    s.stop()
+    assert s.rc["rc"] == 0 and key_files(bare_home) == []
+    assert str(bare_home.root) not in phrase._PENDING
+
+
+def test_confirm_accepts_lookalikes(at_phrase_running):
+    home, port = at_phrase_running
+    out = post(port, "/api/phrase/new")[1]
+    p = out["phrase"]
+    body = confirm_body(p, out["check"])
+    for i in out["check"]:  # also an I or L typed for a 1, and spaces around
+        body["groups"][str(i)] = " " + body["groups"][str(i)].replace("1", "l") + " "
+    assert post(port, "/api/phrase/confirm", body)[0] == 200
+    assert state.load(home)["next"] == "backup"
+    assert key_files(home)
+
+
+def test_confirm_wrong_indices_refused(at_phrase_running):
+    home, port = at_phrase_running
+    out = post(port, "/api/phrase/new")[1]
+    p, check = out["phrase"], out["check"]
+    other = [i for i in range(8) if i not in check][:2]
+    status, err, _, _ = post(port, "/api/phrase/confirm", confirm_body(p, other))
+    assert status == 422 and err["field"] == "groups"
+    assert state.load(home)["next"] == "phrase"
+    assert post(port, "/api/phrase/confirm", confirm_body(p, check))[0] == 200
+
+
+def test_three_misses_shreds(at_phrase_running):
+    home, port = at_phrase_running
+    out = post(port, "/api/phrase/new")[1]
+    check = out["check"]
+    wrong = {"groups": {str(i): "ZZZZZ" if out["phrase"].split("-")[i] != "ZZZZZ" else "YYYYY" for i in check}}
+    for _ in range(2):
+        status, err, _, _ = post(port, "/api/phrase/confirm", wrong)
+        assert status == 422 and err == {"field": "groups", "error": "those groups do not match"}
+        assert key_files(home)
+    status, err, _, _ = post(port, "/api/phrase/confirm", wrong)
+    assert status == 422
+    assert err == {"field": "groups", "error": "those groups do not match", "new_phrase_needed": True,
+                   "reason": "too_many_tries"}
+    assert key_files(home) == []
+    # even the right groups no longer count: that phrase is gone
+    status, err, _, _ = post(port, "/api/phrase/confirm", confirm_body(out["phrase"], check))
+    assert status == 422 and err.get("new_phrase_needed") is True and err["reason"] == "too_many_tries"
+    assert post(port, "/api/phrase/new")[0] == 200 and key_files(home)
+
+
+def test_timeout_shreds(at_phrase_running, monkeypatch):
+    home, port = at_phrase_running
+    monkeypatch.setattr(phrase, "TIMEOUT", 0.2)
+    out = post(port, "/api/phrase/new")[1]
+    assert key_files(home)
+    assert wait_for(lambda: key_files(home) == [])
+    status, err, _, _ = post(port, "/api/phrase/confirm", confirm_body(out["phrase"], out["check"]))
+    assert status == 422 and err.get("new_phrase_needed") is True and err["reason"] == "expired"
+
+
+def test_timer_never_touches_confirmed_keys(at_phrase_running, monkeypatch):
+    home, port = at_phrase_running
+    monkeypatch.setattr(phrase, "TIMEOUT", 0.3)
+    out = post(port, "/api/phrase/new")[1]
+    assert post(port, "/api/phrase/confirm", confirm_body(out["phrase"], out["check"]))[0] == 200
+    time.sleep(0.5)
+    assert key_files(home)
+    phrase.on_stop(home)
+    assert key_files(home)
+
+
+def test_start_shreds_leftover_unconfirmed_keys(bare_home, monkeypatch, capsys):
+    at_phrase(bare_home)
+    keys.create_keys(bare_home)  # as if the server was killed after phrase/new
+    s = Setup(bare_home, monkeypatch, capsys)
+    try:
+        assert key_files(bare_home) == []
+    finally:
+        s.stop()
+
+
+def test_start_keeps_confirmed_keys(bare_home, monkeypatch, capsys):
+    at_phrase(bare_home)
+    keys.create_keys(bare_home)
+    state.advance(bare_home, "phrase")
+    s = Setup(bare_home, monkeypatch, capsys)
+    s.stop()
+    assert key_files(bare_home)
+
+
+def test_no_new_phrase_after_confirm(at_phrase_running):
+    home, port = at_phrase_running
+    out = post(port, "/api/phrase/new")[1]
+    assert post(port, "/api/phrase/confirm", confirm_body(out["phrase"], out["check"]))[0] == 200
+    before = (home.keys_dir / keys.LIVE).read_bytes()
+    status, err, _, raw = post(port, "/api/phrase/new")
+    assert status == 409 and err == {"error": "that step is already done"}
+    assert (home.keys_dir / keys.LIVE).read_bytes() == before
+
+
+def test_plain_phrase_post_does_not_skip_the_phrase(at_phrase_running):
+    home, port = at_phrase_running
+    status, err, _, _ = post(port, "/api/phrase")
+    assert status == 422 and state.load(home)["next"] == "phrase"
+
+
+def confirmed(home: Home, port: int) -> None:
+    out = post(port, "/api/phrase/new")[1]
+    assert post(port, "/api/phrase/confirm", confirm_body(out["phrase"], out["check"]))[0] == 200
+
+
+def test_backup_dir_must_be_writable(at_phrase_running, tmp_path):
+    home, port = at_phrase_running
+    confirmed(home, port)
+    ro = tmp_path / "readonly"
+    ro.mkdir()
+    ro.chmod(0o500)
+    try:
+        for target in (str(ro), "relative/dir", str(tmp_path / "missing"), str(tmp_path / "x\ny")):
+            status, err, _, _ = post(port, "/api/backup", {"kind": "dir", "target": target})
+            assert status == 422 and err["field"] == "target", target
+    finally:
+        ro.chmod(0o700)
+    assert list(ro.iterdir()) == []
+    assert backup.load_config(home)["destinations"] == []
+    _, _, st = call(port, "GET", "/api/state", cookie=TOKEN)
+    assert json.loads(st)["backup_warning"] == serve.backup_failed(backup.NO_DEST, None)
+    status, _, _, _ = post(port, "/api/backup", {"kind": "later"})
+    assert status == 200 and backup.load_config(home)["destinations"] == []
+    assert backup_step.warning(home) == serve.backup_failed(backup.NO_DEST, None)  # the server has shut down
+
+
+def test_backup_dir_and_rclone_saved(at_phrase_running, tmp_path):
+    home, port = at_phrase_running
+    confirmed(home, port)
+    for bad in ("nocolon", "-flag:x", "name:pa\nth", ":"):
+        status, err, _, _ = post(port, "/api/backup", {"kind": "rclone", "target": bad})
+        assert status == 422 and err["field"] == "target", bad
+    assert post(port, "/api/backup", {"kind": "nope"})[0] == 422
+    dest = tmp_path / "backups"
+    dest.mkdir()
+    assert post(port, "/api/backup", {"kind": "dir", "target": str(dest)})[0] == 200
+    assert backup.load_config(home)["destinations"] == [{"kind": "dir", "path": str(dest)}]
+    assert list(dest.iterdir()) == []
+    assert backup_step.warning(home) is None
+
+
+def test_backup_rclone_saved(at_phrase_running):
+    home, port = at_phrase_running
+    confirmed(home, port)
+    assert post(port, "/api/backup", {"kind": "rclone", "target": "skhub-nor:backups/sidekick"})[0] == 200
+    assert backup.load_config(home)["destinations"] == [{"kind": "rclone", "remote": "skhub-nor:backups/sidekick"}]
+
+
+def test_backup_rolled_back_if_going_live_fails(at_phrase_running, tmp_path, monkeypatch):
+    home, port = at_phrase_running
+    confirmed(home, port)
+    dest = tmp_path / "backups"
+    dest.mkdir()
+
+    def boom(self):
+        raise OSError("disk")
+
+    monkeypatch.setattr(Home, "new_instance", boom)
+    assert post(port, "/api/backup", {"kind": "dir", "target": str(dest)})[0] == 500
+    assert backup.load_config(home)["destinations"] == []
+    assert not (home.state_dir / "instance.json").exists()
+    assert state.load(home)["next"] == "backup"
+
+
+def test_done_makes_it_live(bare_home, monkeypatch, capsys, tmp_path):
+    at_phrase(bare_home)
+    s = Setup(bare_home, monkeypatch, capsys)
+    out = post(s.port, "/api/phrase/new", tok=s.tok)[1]
+    assert post(s.port, "/api/phrase/confirm", confirm_body(out["phrase"], out["check"]), tok=s.tok)[0] == 200
+    assert post(s.port, "/api/backup", {"kind": "later"}, tok=s.tok)[0] == 200
+    s.t.join(5)
+    assert s.rc["rc"] == 0
+    assert bare_home.instance()["status"] == "live"
+    assert state.is_complete(bare_home)
+    assert key_files(bare_home)  # going live keeps the confirmed key
+    assert keys.unwrap_identity((bare_home.keys_dir / keys.WRAPPED).read_bytes(), out["phrase"])
+
+
+def _start_setup(home: Home):
+    import subprocess
+    import sys
+
+    at_phrase(home)
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"), "SKSIDEKICK_HOME": str(home.root)}
+    return subprocess.Popen(
+        [sys.executable, "-c", "import sys; from sksidekick.cli import main; sys.exit(main(sys.argv[1:]))", "setup", "--port", "0"],
+        env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+
+def _url(proc, seconds=60.0) -> tuple[int, str]:
+    """The first stdout line, read with a deadline (a reader thread), as (port, token). A cold macOS runner
+    can take many seconds to start a fresh Python with pyrage, hence the long deadline; a miss says why."""
+    import queue
+    import subprocess
+
+    q: queue.Queue = queue.Queue()
+    threading.Thread(target=lambda: q.put(proc.stdout.readline()), daemon=True).start()
+    try:
+        line = q.get(timeout=seconds)
+    except queue.Empty:
+        line = ""
+    m = re.search(r"Open http://127\.0\.0\.1:(\d+)/\?t=(\S+)", line)
+    if not m:
+        code = proc.poll()  # None: still running when the deadline passed
+        if code is None:
+            proc.kill()
+        try:
+            err = proc.communicate(timeout=10)[1] or ""
+        except (subprocess.TimeoutExpired, ValueError, OSError):
+            err = "<stderr unreadable>"
+        raise AssertionError(
+            f"setup did not print its address within {seconds:.0f}s "
+            f"({'still running, killed' if code is None else f'exited {code}'}); first stdout line {line!r}; "
+            f"stderr: {err[-2000:]!r}")
+    return int(m.group(1)), m.group(2)
+
+
+@pytest.mark.parametrize("signame, code", [("SIGTERM", 143), ("SIGHUP", 129)])
+def test_signal_stop_shreds_unconfirmed_keys(bare_home, signame, code):
+    import signal
+
+    if not hasattr(signal, signame):
+        pytest.skip(f"no {signame} here")
+    proc = _start_setup(bare_home)
+    try:
+        port, tok = _url(proc)
+        status, out, _, _ = post(port, "/api/phrase/new", tok=tok)
+        assert status == 200 and key_files(bare_home)
+        proc.send_signal(getattr(signal, signame))
+        _, err = proc.communicate(timeout=10)
+        assert proc.returncode == code
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait(5)
+        proc.stdout.close()
+        proc.stderr.close()
+    assert key_files(bare_home) == []
+    assert out["phrase"] not in err and not any(g in err for g in out["phrase"].split("-"))
+
+
+def test_no_new_keys_after_stop(at_phrase_running):
+    home, port = at_phrase_running
+    phrase.on_stop(home)
+    status, err, _, _ = post(port, "/api/phrase/new")
+    assert status == 409 and "error" in err
+    assert key_files(home) == []
+    phrase.on_start(home)  # a fresh start for the same home lifts it
+    assert post(port, "/api/phrase/new")[0] == 200
+
+
+def test_corrupt_progress_keeps_keys_and_says_so(at_phrase_running, capfd):
+    home, port = at_phrase_running
+    assert post(port, "/api/phrase/new")[0] == 200
+    (home.state_dir / "setup.json").write_text("{not json")
+    phrase.on_stop(home)
+    assert key_files(home)
+    assert "setup stopped; unconfirmed keys were left in place, run setup again to clear them" in capfd.readouterr().err
+    assert str(home.root) not in phrase._PENDING
+
+
+def test_signals_ignored_during_stop_shred_and_restored(bare_home, monkeypatch):
+    """main_setup in the main thread: on_stop runs with SIGTERM/SIGHUP ignored, then the old handlers are back."""
+    import signal
+
+    assert threading.current_thread() is threading.main_thread()
+    sigs = [getattr(signal, n) for n in ("SIGTERM", "SIGHUP") if hasattr(signal, n)]
+    before = {s: signal.getsignal(s) for s in sigs}
+    seen = {}
+    real_stop = phrase.on_stop
+
+    def on_stop(home):
+        seen.update({s: signal.getsignal(s) for s in sigs})
+        real_stop(home)
+
+    monkeypatch.setattr(phrase, "on_stop", on_stop)
+    real_make = server.make_server
+
+    def make(*a, **k):
+        srv = real_make(*a, **k)
+        seen["installed"] = {s: signal.getsignal(s) for s in sigs}
+        threading.Timer(0.1, srv.shutdown).start()  # a normal, non-signal stop
+        return srv
+
+    monkeypatch.setattr(server, "make_server", make)
+    at_phrase(bare_home)
+    assert server.main_setup(bare_home, "127.0.0.1", 0) == 0
+    assert all(seen["installed"][s] is server._raise_stopped for s in sigs)
+    assert all(seen[s] == signal.SIG_IGN for s in sigs)
+    assert {s: signal.getsignal(s) for s in sigs} == before
+
+
+def test_backup_dir_inside_the_home_refused(at_phrase_running, tmp_path):
+    """A backup inside the sidekick's own home dies with it: refused everywhere, also through a link."""
+    home, port = at_phrase_running
+    confirmed(home, port)
+    (home.root / "backups").mkdir(parents=True)
+    link = tmp_path / "looks-elsewhere"
+    link.symlink_to(home.root / "backups")
+    for target in (str(home.root), str(home.root / "backups"), str(home.root / "backups" / ".." / "backups"), str(link)):
+        status, err, _, _ = post(port, "/api/backup", {"kind": "dir", "target": target})
+        assert status == 422 and err["field"] == "target", target
+        assert err["error"] == backup_step.INSIDE_HOME
+    assert backup.load_config(home)["destinations"] == []
+    assert state.load(home)["next"] == "backup"
+
+
+def _mountinfo(monkeypatch, tmp_path, *mount_points: str) -> None:
+    """A fake /proc/self/mountinfo with these mount points (all on one device, 8:1, as on one host disk)."""
+    lines = [f"{20 + i} 1 8:1 / {m.replace(' ', chr(92) + '040')} rw - ext4 /dev/sda1 rw" for i, m in enumerate(("/",) + mount_points)]
+    f = tmp_path / "mountinfo"
+    f.write_text("\n".join(lines) + "\n")
+    monkeypatch.setattr(backup_step, "MOUNTINFO", f)
+
+
+@pytest.mark.parametrize("container", [True, False])
+def test_backup_on_the_homes_mount_in_a_container_warns(at_phrase_running, tmp_path, monkeypatch, container):
+    home, port = at_phrase_running
+    if container:
+        monkeypatch.setenv("SKSIDEKICK_IN_CONTAINER", "1")
+    _mountinfo(monkeypatch, tmp_path)  # one mount holds both the home and the folder
+    confirmed(home, port)
+    dest = tmp_path / "backups"
+    dest.mkdir()
+    status, body, _, _ = post(port, "/api/backup", {"kind": "dir", "target": str(dest)})
+    assert status == 200
+    assert body == ({"warning": backup_step.SAME_DISK} if container else {})
+    assert backup.load_config(home)["destinations"] == [{"kind": "dir", "path": str(dest)}]
+    assert "docker exec -it <container> sksidekick backup add-dir /backups" in backup_step.SAME_DISK
+
+
+def test_mount_check(bare_home, tmp_path, monkeypatch):
+    monkeypatch.setenv("SKSIDEKICK_IN_CONTAINER", "1")
+    bare_home.root.mkdir(parents=True)
+    dest = tmp_path / "my backups"
+    dest.mkdir()
+    d = {"kind": "dir", "path": str(dest)}
+    # the documented happy path: a bind mount on the same host disk (same device) is its own mount
+    _mountinfo(monkeypatch, tmp_path, str(dest.resolve()))
+    assert backup_step.same_disk_warning(bare_home, d) is None
+    # the home on its own volume, the folder on the root mount: different mounts, no warning
+    _mountinfo(monkeypatch, tmp_path, str(bare_home.root.resolve()))
+    assert backup_step.same_disk_warning(bare_home, d) is None
+    # the folder sits on the home's mount
+    _mountinfo(monkeypatch, tmp_path, str(tmp_path.resolve()))
+    assert backup_step.same_disk_warning(bare_home, d) == backup_step.SAME_DISK
+    # no mountinfo (macOS): no warning, except under the data volume
+    monkeypatch.setattr(backup_step, "MOUNTINFO", tmp_path / "missing")
+    assert backup_step.same_disk_warning(bare_home, d) is None
+    monkeypatch.setattr(backup_step, "DATA_VOLUME", tmp_path.resolve())
+    assert backup_step.same_disk_warning(bare_home, d) == backup_step.SAME_DISK
+    monkeypatch.delenv("SKSIDEKICK_IN_CONTAINER")
+    assert backup_step.same_disk_warning(bare_home, d) is None
+    assert backup_step.same_disk_warning(bare_home, {"kind": "rclone", "remote": "x:y"}) is None
+    assert backup_step.same_disk_warning(bare_home, None) is None

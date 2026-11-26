@@ -24,7 +24,9 @@ EXCLUDE_DIRS = (
     f"{AGENT_STORE}/logs",
 )
 # SQLite rebuilds its shared-memory index (-shm) on open; it is machine-local and comes and goes while Hermes runs.
-EXCLUDE_GLOBS = ("*.lock", "*.pid", "*-shm")
+# *.tmp: a half-written file an atomic write left behind (hermes/.env.tmp, config.yaml.tmp). Never story, and a
+# .env.tmp would otherwise carry credentials past the .env redactor.
+EXCLUDE_GLOBS = ("*.lock", "*.pid", "*-shm", "*.tmp")
 
 
 def excluded(rel: PurePosixPath | Path | str) -> bool:
@@ -124,8 +126,11 @@ class Home:
     def _write_instance(self, data: dict) -> None:
         self.state_dir.mkdir(parents=True, exist_ok=True)
         tmp = self._instance_path().with_suffix(".tmp")
-        tmp.write_text(json.dumps(data))
-        os.replace(tmp, self._instance_path())
+        try:
+            tmp.write_text(json.dumps(data))
+            os.replace(tmp, self._instance_path())
+        finally:
+            tmp.unlink(missing_ok=True)  # gone already after the replace; a failed write leaves nothing
 
     def new_instance(self) -> str:
         iid = secrets.token_hex(8)
