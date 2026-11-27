@@ -38,6 +38,9 @@ RUN set -eu; \
 COPY --chmod=0755 packaging/sksidekick-shim.sh /usr/local/bin/sksidekick
 COPY --chmod=0755 packaging/sidekick-hermes.sh /usr/local/bin/sidekick-hermes
 COPY --chmod=0755 packaging/sidekick-start.sh /usr/local/bin/sidekick-start
+COPY --chmod=0755 packaging/sidekick-invite.sh /usr/local/bin/sidekick-invite
+# Runs as root after the base image's own cont-init steps, before the container command drops to hermes.
+COPY --chmod=0755 packaging/cont-init.d/03-sksidekick-invite /etc/cont-init.d/03-sksidekick-invite
 COPY --chmod=0644 packaging/skmemory.json /opt/sksidekick/skmemory.json
 
 ENV SKSIDEKICK_HOME=/opt/data/sidekick

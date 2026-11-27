@@ -172,6 +172,16 @@ sidekick that is already set up does not use an invite.
 docker run -d --name sidekick -v sidekick-data:/opt/data -v /path/to/invite.json:/run/invite:ro -e SKSIDEKICK_INVITE=/run/invite IMAGE
 ```
 
+The invite can stay mode 0600 and owned by you. Setup runs as the container's `hermes` user (uid 10000),
+which cannot read such a file, so the container reads it as root when it starts, before it drops to that user,
+and puts a private copy in the data volume (`/opt/data/invite.json`, owned by `hermes`, mode 0600). Setup uses
+that copy and deletes it once the shared option is saved. The log says so in one line; the invite itself is
+never printed. If the person picks another option, the copy stays in the volume unused: delete it with
+`docker exec sidekick rm /opt/data/invite.json`.
+
+An invite you already copied into the volume yourself (`/opt/data/invite.json`, owned by uid 10000, mode
+0600, with `-e SKSIDEKICK_INVITE=/opt/data/invite.json`) is used where it is.
+
 Setup runs in the container and its page is on the setup port. A missing or bad invite file is one line in
 the container log. Setup cannot delete a read-only mount, so once the shared option is saved, delete the
 invite file on the host yourself and leave out the `-v .../invite.json` and `-e SKSIDEKICK_INVITE` options the

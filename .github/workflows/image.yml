@@ -41,6 +41,8 @@ jobs:
         run: bash tests/image/test_memory_turn.sh "sksidekick:${{ matrix.arch }}"
       - name: First run through the setup page
         run: bash tests/image/test_setup_page.sh "sksidekick:${{ matrix.arch }}"
+      - name: A 0600 invite on a read only mount reaches setup
+        run: bash tests/image/test_invite_mount.sh "sksidekick:${{ matrix.arch }}"
       - name: User systemd session (for the move test)
         if: matrix.arch == 'amd64'
         run: |
