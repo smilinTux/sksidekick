@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from sksidekick import backup, drill, lifecycle
+from sksidekick import backup, drill, lifecycle, seat_notice
 from sksidekick.home import Home
 
 TICK = 60.0  # backups and drills are considered once a minute
@@ -203,6 +203,7 @@ def serve(
     spawn: Callable[[list[str]], object] = spawn_gateway,
     jitter: Callable[[], float] = lambda: random.uniform(0, 600),
     stop: Callable[[], bool] = lambda: False,
+    notice: Callable[[Home], object] = seat_notice.Notice,
 ) -> int:
     """Supervise the gateway. Returns 3 when the copy must not run, 0 when stopped."""
     why = precheck(home)
@@ -216,6 +217,8 @@ def serve(
     state: dict = {}
     backup_jitter = jitter()
     last_check: float | None = None
+    # While a seat is installed: the plain answer Hermes falls back to when the gateway refuses it (#9).
+    seat_note = notice(home)
     try:
         while not stop():
             try:
@@ -223,6 +226,7 @@ def serve(
             except RuntimeError as exc:
                 print(f"sksidekick serve: {exc}; stopping the gateway", file=sys.stderr)
                 return 0
+            seat_note.ensure()
             mono = clock()
             if child is not None and child.poll() is not None:
                 child = None
@@ -251,6 +255,7 @@ def serve(
         return 0
     finally:
         _stop_child(child)
+        seat_note.close()
 
 
 def main_serve(home: Home, gateway_argv: list[str] | None) -> int:
