@@ -1,0 +1,3 @@
+#!/command/with-contenv sh
+# Root, before the drop to hermes: make a mounted invite readable by setup (packaging/sidekick-invite.sh).
+exec /usr/local/bin/sidekick-invite
