@@ -244,11 +244,14 @@ An invite for another seat, or an expired one, is refused and the file is kept.
 sksidekick-seat --seats-dir "$SEATS" --estate "$ESTATE" remove "$CLIENT_ID" --registry "$REGISTRY"
 ```
 
-This revokes the credential and marks the seat removed in the record. From then on the sidekick stops
-answering: every turn fails at the gateway with a refused credential, and Hermes tells the person to run
-`hermes setup`. That message is not the way back (a known follow-up). The sidekick answers again only when the
-person gets a new seat from an operator, or starts setup over and picks another model option. The operator
-cannot reach into it. Tell the person to keep their story
+This revokes the credential and marks the seat removed in the record. From then on every turn is refused at
+the gateway, and the sidekick answers each message with one plain sentence instead: the shared seat was
+removed or is no longer valid, so ask whoever invited you for a new invite, or pick another model option on
+the setup page. (While a seat is installed, `sksidekick serve` runs a small notice on the sidekick's own
+loopback and sets it as Hermes' fallback provider; it asks the gateway whether it still takes the seat, and
+says the gateway is not answering when the refusal was for another reason. It never calls a model.) The
+sidekick answers normally again only when the person gets a new seat from an operator, or starts setup over
+and picks another model option. The operator cannot reach into it. Tell the person to keep their story
 first, then delete it if they want it gone:
 
 ```sh

@@ -8,7 +8,7 @@
 # one real Hermes turn carries a canary. Checks: the stub saw the turn; /admin/clients/usage counts it under
 # the seat's client id and sksidekick-seat usage names the owner; the canary and the token are in no
 # gateway file and not in its output; after sksidekick-seat remove and SIGHUP the gateway answers 401 and
-# the next Hermes turn fails with it.
+# the next Hermes turn gets the seat notice's plain answer (sksidekick.seat_notice), never `hermes setup`.
 # Needs: git, node 22 with npm, python3, curl. Linux CI runs it on a fresh HOME (see .github/workflows/seats.yml).
 # No pipefail: checks pipe into grep -q (see tests/image/test_image.sh).
 set -eu
@@ -209,6 +209,11 @@ no_needle "$CANARY" "canary (turn content)" "$gw" "$work/gateway.out"
 no_needle "$token" "token" "$gw" "$work/gateway.out" "$work/setup.log" "$work/install.log"
 ok "the canary and the token are in no gateway file and not in its output"
 
+# The service's `sksidekick serve` sets the seat notice as Hermes' fallback once the seat is installed.
+for _ in $(seq 90); do hermes config get fallback_providers 2>/dev/null | grep -q sidekick-seat-notice && break; sleep 1; done
+hermes config get fallback_providers 2>/dev/null | grep -q sidekick-seat-notice || fail "serve did not set the seat notice as Hermes' fallback"
+ok "serve set the seat notice as Hermes' fallback"
+
 # 9. Remove the seat: revoke plus SIGHUP, and the next turn is refused with 401.
 # The seat's own headers, from the sidekick's .env and seat.json, in a 0600 file (never on a command line).
 python3 - "$H/hermes/.env" "$H/seat.json" "$work/seat.headers" <<'PY'
@@ -247,10 +252,11 @@ turn="$(hermes chat -Q -q "Second turn after removal $CANARY." 2>&1)" || rc=$?
 printf '%s\n' "$turn" | tail -5 | sed 's/^/  hermes: /'
 logs="$(new_log_lines | grep -F client_auth_denied | tail -3 || true)"
 printf '%s\n' "$logs" | sed 's/^/  log: /'
-[ "$rc" != 0 ] || fail "the Hermes turn after the remove exited 0"
-printf '%s\n' "$turn" | grep -qE "HTTP 401\b|client_auth_denied" || fail "the Hermes turn after the remove does not report the 401"
+printf '%s\n' "$turn" | grep -qF "The shared seat this sidekick uses was removed or is no longer valid" \
+    || fail "the Hermes turn after the remove did not get the seat notice's answer"
+printf '%s\n' "$turn" | grep -qF "hermes setup" && fail "the Hermes turn after the remove still says to run hermes setup"
 [ -n "$logs" ] || fail "no Hermes log line written by the refused turn names client_auth_denied"
-ok "after remove and SIGHUP Hermes reports the gateway's 401 (exit $rc; client_auth_denied in its new log lines)"
+ok "after remove and SIGHUP the gateway refuses the seat (client_auth_denied in Hermes' log) and the person gets the plain seat notice (exit $rc)"
 no_needle "$CANARY" "canary (turn content)" "$gw" "$work/gateway.out"
 no_needle "$token" "token" "$gw" "$work/gateway.out"
 ok "still no content and no token on the gateway after the refused turn"
