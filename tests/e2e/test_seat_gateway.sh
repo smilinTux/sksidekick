@@ -31,7 +31,10 @@ pids=""
 cleanup() {
     for p in $pids; do kill "$p" 2>/dev/null || true; done
     sleep 1
-    rm -rf "$work"
+    # A process that is still exiting can write into the sidekick home while it is removed; try again, and
+    # never let cleanup turn a passed run into a failure.
+    for _ in 1 2 3 4 5; do rm -rf "$work" 2>/dev/null && return 0; sleep 2; done
+    rm -rf "$work" || true
 }
 trap cleanup EXIT
 fail() { echo "FAIL: $*" >&2; exit 1; }
