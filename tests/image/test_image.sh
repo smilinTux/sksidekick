@@ -45,7 +45,7 @@ want="$(sed -n 's/^HERMES_RELEASE_DATE=//p' "$(dirname "$0")/../../packaging/ver
 case "$ver" in *"($want)"*) ;; *) fail "wrong Hermes build: $ver (want release $want)";; esac
 docker exec "$C" sh -c 'command -v skmemory-mcp' >/dev/null || fail "skmemory-mcp not on PATH"
 docker exec "$C" test -f /opt/hermes/plugins/memory/skmemory/plugin.yaml || fail "plugin not bundled"
-ok "Hermes sk.4, skmemory-mcp and the bundled plugin are present"
+ok "Pinned Hermes, skmemory-mcp and the bundled plugin are present"
 
 wait_for 60 "memory.provider skmemory" sh -c "docker exec '$C' sidekick-hermes config get memory.provider | grep -qx skmemory"
 docker exec "$C" test -f /opt/data/sidekick/hermes/skmemory.json || fail "skmemory.json missing"
