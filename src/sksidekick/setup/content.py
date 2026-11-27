@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-GATEWAY_URL_ENV = "SKSIDEKICK_GATEWAY_URL"
-GATEWAY_KEY_ENV = "SKSIDEKICK_GATEWAY_KEY"
 SHARED_DISABLED = "Available when we invite you (a seat)"
 
 TIERS = (
@@ -33,7 +31,7 @@ TIERS = (
             "and the model provider sees your messages. The provider sees our account, never your "
             "name, email or IP; we can see how much your sidekick uses and when, never what it says."
         ),
-        "needs": [GATEWAY_URL_ENV, GATEWAY_KEY_ENV],
+        "needs": [],
     },
 )
 

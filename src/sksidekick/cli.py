@@ -53,6 +53,9 @@ def _cmd_export(home: Home, a) -> int:
         print(archive.export(home, Path(a.path), with_credentials=creds))
     if not creds:
         print("Channel logins were left out (add --with-credentials to keep them).")
+        if (home.root / "seat.json").exists():
+            print("The gateway seat credential was left out too. A sidekick restored from this on another "
+                  "machine needs a rotated invite from the operator to use the shared gateway.")
     return 0
 
 
@@ -156,7 +159,10 @@ def _cmd_setup(home: Home, a) -> int:
         return 2
     from sksidekick.setup import server
 
-    return server.main_setup(home, a.host, a.port)
+    if a.keep_invite and not a.invite:
+        print("--keep-invite goes with --invite", file=sys.stderr)
+        return 2
+    return server.main_setup(home, a.host, a.port, invite=a.invite, keep_invite=a.keep_invite)
 
 
 def _cmd_status(home: Home, a) -> int:
@@ -214,6 +220,8 @@ def _parser() -> argparse.ArgumentParser:
     u.add_argument("--start-over", action="store_true",
                    help="throw away an unfinished setup (keys, settings, progress) so it can begin again; never a live sidekick")
     u.add_argument("--yes", action="store_true", help="with --start-over: do not ask first")
+    u.add_argument("--invite", metavar="FILE", help="an invite file from whoever runs your gateway; enables the shared option")
+    u.add_argument("--keep-invite", action="store_true", help="with --invite: keep the file (it is a secret; it is deleted by default)")
     u.set_defaults(fn=_cmd_setup)
     return p
 

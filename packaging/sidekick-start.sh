@@ -28,8 +28,13 @@ if [ ! -f "$home/state/instance.json" ] && [ "${SKSIDEKICK_SETUP:-on}" != off ];
     said=1
     # Only a container gets here (the plain install's service has SKSIDEKICK_SETUP=off): say so to setup,
     # whose model and backup hints differ there. The image's Dockerfile sets it too, for docker exec.
+    # SKSIDEKICK_INVITE: a path to an invite file mounted into the container. Setup only reads it at start;
+    # it is installed and deleted when the shared option is saved (init and import still work before that). A missing or bad file is one line in this log.
+    invite_args=""
+    [ -z "${SKSIDEKICK_INVITE:-}" ] || invite_args=1
     SKSIDEKICK_IN_CONTAINER="${SKSIDEKICK_IN_CONTAINER:-1}" \
-        "$bin/sksidekick" setup --host 0.0.0.0 --port "${SKSIDEKICK_SETUP_PORT:-8765}" &
+        "$bin/sksidekick" setup --host 0.0.0.0 --port "${SKSIDEKICK_SETUP_PORT:-8765}" \
+        ${invite_args:+--invite "$SKSIDEKICK_INVITE"} &
     setup_pid=$!
     stopping=""
     # docker stop and systemd send SIGTERM here: pass it on so setup shreds an unconfirmed key, then leave.
@@ -45,6 +50,9 @@ if [ ! -f "$home/state/instance.json" ] && [ "${SKSIDEKICK_SETUP:-on}" != off ];
         echo "Setup stopped (exit $setup_code)."
         said=""
     fi
+elif [ -n "${SKSIDEKICK_INVITE:-}" ] && [ -f "$home/state/instance.json" ]; then
+    # Never applied here: an old invite left mounted would put back a revoked credential on every restart.
+    echo "SKSIDEKICK_INVITE is set, but this sidekick is already set up; the invite was not used. A new invite for the same seat: docker exec <container> sksidekick setup --invite FILE"
 fi
 
 while [ ! -f "$home/state/instance.json" ]; do

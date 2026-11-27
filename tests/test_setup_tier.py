@@ -61,34 +61,8 @@ def test_hermes_failure_hides_the_key(bare_home, monkeypatch):
     assert "sk-secret" not in str(e.value)
 
 
-def test_shared_disabled_without_seat(running, monkeypatch):
+def test_shared_tier_refused_without_seat(running, fake_hermes):
     home, port = running
-    monkeypatch.delenv("SKSIDEKICK_GATEWAY_URL", raising=False)
-    monkeypatch.delenv("SKSIDEKICK_GATEWAY_KEY", raising=False)
-    _, _, data = call(port, "GET", "/api/state", cookie=TOKEN)
-    assert json.loads(data)["tiers"]["shared"]["enabled"] is False
-    monkeypatch.setenv("SKSIDEKICK_GATEWAY_URL", "https://gw.example/v1")
-    monkeypatch.setenv("SKSIDEKICK_GATEWAY_KEY", "gw-secret")
-    _, _, raw = call(port, "GET", "/api/state", cookie=TOKEN)
-    shared = json.loads(raw)["tiers"]["shared"]
-    assert shared["enabled"] is True and shared["base_url"] == "https://gw.example/v1" and shared["key_set"] is True
-    assert b"gw-secret" not in raw
-
-
-def test_shared_tier_posts_from_env(running, fake_hermes, monkeypatch):
-    home, port = running
-    monkeypatch.setenv("SKSIDEKICK_GATEWAY_URL", "https://gw.example/v1")
-    monkeypatch.setenv("SKSIDEKICK_GATEWAY_KEY", "gw-secret")
-    status, _ = post(port, "/api/tier", {"tier": "shared"})
-    assert status == 200
-    assert fake_hermes.get("model.base_url") == "https://gw.example/v1"
-    assert "CUSTOM_API_KEY=gw-secret" in (home.hermes_dir / ".env").read_text().splitlines()
-
-
-def test_shared_tier_refused_without_seat(running, fake_hermes, monkeypatch):
-    home, port = running
-    monkeypatch.delenv("SKSIDEKICK_GATEWAY_URL", raising=False)
-    monkeypatch.delenv("SKSIDEKICK_GATEWAY_KEY", raising=False)
     status, body = post(port, "/api/tier", {"tier": "shared"})
     assert status == 422 and body["field"] == "tier"
     assert fake_hermes.calls() == []

@@ -12,6 +12,7 @@ import secrets
 import shlex
 import shutil
 import signal
+import subprocess
 import sys
 import threading
 from http import HTTPStatus
@@ -156,7 +157,7 @@ class _Handler(BaseHTTPRequestHandler):
             extra = {"Set-Cookie": f"{COOKIE}={self.server.token}; HttpOnly; SameSite=Strict; Path=/"}
         if url.path == "/api/state":
             home = self.server.home
-            out = {**state.load(home), "tiers": tier.tiers_state(), "channels": channels.channels_state(home), **soul.personality_state(),
+            out = {**state.load(home), "tiers": tier.tiers_state(home), "channels": channels.channels_state(home), **soul.personality_state(),
                    "backup_warning": backup_step.warning(home), **where(home)}
             return self._send(200, json.dumps(out).encode(), "application/json", extra)
         rel = "index.html" if url.path == "/" else url.path[len("/static/"):] if url.path.startswith("/static/") else None
@@ -280,23 +281,112 @@ def _shown_host(host: str) -> str:
     return "127.0.0.1" if host in ("", "0.0.0.0", "::") else host
 
 
-def main_setup(home: Home, host: str = "127.0.0.1", port: int = 8765) -> int:
+def _stage_invite(home: Home, path: str, keep: bool) -> None:
+    """Read and check the operator's invite; nothing is written to the home until the shared tier is saved.
+    A missing or bad file is one plain line (never its contents), the file stays, and setup goes on without it."""
+    from sksidekick.seats.record import Invite
+    from sksidekick.setup import seat
+
+    try:
+        invite = Invite.from_json(Path(path).read_text())
+    except OSError:
+        print(f"could not read the invite file {path}; setup starts without a seat", file=sys.stderr)
+        return
+    except ValueError as e:
+        print(f"the invite file {path} was not used ({e}); setup starts without a seat", file=sys.stderr)
+        return
+    if seat.expired(invite):
+        print(f"the invite file {path} was not used ({tier.REVOKED}); it was left in place", file=sys.stderr)
+    seat.stage(home, invite, path, keep)
+
+
+def _restart_command() -> str:
+    """How to restart this sidekick where it runs (packaging/: the container, the launchd agent, the unit)."""
+    if os.environ.get("SKSIDEKICK_IN_CONTAINER") == "1":
+        return "docker restart <container> (on the host)"
+    if sys.platform == "darwin":
+        return f"launchctl kickstart -k gui/{os.getuid()}/io.skworld.sksidekick"
+    return "systemctl --user restart sksidekick"
+
+
+def _rotate_invite(home: Home, path: str, keep: bool) -> int:
+    """A live sidekick takes a new invite only for the seat it already has (same client id): a rotation."""
+    from sksidekick.seats.record import Invite
+    from sksidekick.setup import hermes_config, seat
+
+    not_used = "an invite was given, but this sidekick is already set up; the invite was not used"
+    try:
+        lock = start_over.hold(home, exclusive=False)
+    except start_over.NoLock:
+        lock = -1
+    if lock is None:
+        print(f"{home.root} is being changed by another command; try again when it has finished", file=sys.stderr)
+        return 1
+    try:
+        try:
+            invite = Invite.from_json(Path(path).read_text())
+        except OSError:
+            print(f"could not read the invite file {path}; {not_used.split('; ')[1]}", file=sys.stderr)
+            return 1
+        except ValueError as e:
+            print(f"the invite file {path} was not used ({e})", file=sys.stderr)
+            return 1
+        current = seat.load(home)
+        if current is None or current.client_id != invite.client_id:
+            print(not_used, file=sys.stderr)
+            return 1
+        if seat.expired(invite):
+            print(f"the invite file {path} was not used ({tier.REVOKED}); it was left in place", file=sys.stderr)
+            return 1
+        def get(key: str) -> str | None:
+            r = subprocess.run(["hermes", "config", "get", key], capture_output=True, text=True,
+                               timeout=60, env={**os.environ, "HERMES_HOME": str(home.hermes_dir)})
+            return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
+
+        try:
+            if get("model.provider") != hermes_config.GATEWAY_PROVIDER:
+                print("this sidekick does not use the shared gateway now; the invite was not used", file=sys.stderr)
+                return 1
+            seat.rotate(home, invite, get("model.default") or tier.DEFAULT_SHARED_MODEL)
+        except (hermes_config.HermesError, ValueError, OSError, subprocess.SubprocessError):
+            print("the new invite could not be applied; the sidekick keeps its old credential", file=sys.stderr)
+            return 1
+        if not keep:
+            try:
+                os.unlink(path)
+            except OSError:
+                print(f"the new invite was applied but {path} could not be removed; delete it", file=sys.stderr)
+        print(f"the new invite was applied; restart the sidekick so it reads the new credential: {_restart_command()}")
+        return 0
+    finally:
+        if lock not in (None, -1):
+            os.close(lock)
+
+
+def main_setup(home: Home, host: str = "127.0.0.1", port: int = 8765, invite: str | None = None,
+               keep_invite: bool = False) -> int:
     inst = home.state_dir / "instance.json"
     setup = home.state_dir / "setup.json"
     if (inst.exists() and not setup.exists()) or (setup.exists() and state.is_complete(home)):
         print(f"{home.root} is already set up", file=sys.stderr)
+        if invite:
+            return _rotate_invite(home, invite, keep_invite)
         return 1
     # Held (shared) while this server runs: `setup --start-over` needs the home to itself.
     try:
         lock = start_over.hold(home, exclusive=False)
     except start_over.NoLock as e:  # setup still works; only the guard against a start-over is missing
         print(f"{e.strerror}; setup runs without the lock that keeps setup --start-over away", file=sys.stderr)
+        if invite:
+            _stage_invite(home, invite, keep_invite)
         return _run(home, host, port)
     if lock is None:
         print(f"{home.root} is being started over (sksidekick setup --start-over); run setup when it has finished",
               file=sys.stderr)
         return 1
     try:
+        if invite:
+            _stage_invite(home, invite, keep_invite)
         return _run(home, host, port)
     finally:
         os.close(lock)

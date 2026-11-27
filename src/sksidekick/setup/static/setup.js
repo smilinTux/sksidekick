@@ -183,6 +183,7 @@
       wrap.appendChild(label);
       wrap.appendChild(el("p", { class: "privacy" }, t.label));
       if (!enabled && t.disabled_label) wrap.appendChild(el("p", { class: "hint" }, t.disabled_label));
+      if (enabled && t.host) wrap.appendChild(el("p", { class: "hint" }, "Gateway: " + t.host));
       box.appendChild(wrap);
       input.addEventListener("change", tierFields);
     });

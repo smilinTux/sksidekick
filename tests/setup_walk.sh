@@ -5,7 +5,8 @@
 # Steps: the private tier against a model at $SETUP_WALK_MODEL_URL (tests/image/stub_model.py; it must be
 # reachable from the setup server, default http://127.0.0.1:18999/v1), zero channels, mentor + female,
 # a new phrase confirmed with the two groups it asks for, backups to the folder $SETUP_WALK_BACKUP_DIR
-# (a path as the setup server sees it). Used by tests/image/test_setup_page.sh and the installer test.
+# (a path as the setup server sees it). SETUP_WALK_TIER=shared picks the seat's shared gateway instead of the
+# private tier (setup must have been started with --invite), with model $SETUP_WALK_MODEL. Used by tests/image/test_setup_page.sh and the installer test.
 # The phrase is never printed. If file descriptor 3 is open, the phrase is written there (and only there)
 # so the caller can check that it appears in no file and no log.
 set -eu
@@ -40,7 +41,11 @@ next="$(curl -sS -b "$jar" "$base/api/state" | json 'd["next"]')"
 [ "$next" = tier ] || fail "setup does not start at the model step (next: $next)"
 echo "ok: setup page and state answer"
 
-post api/tier "{\"tier\": \"private\", \"base_url\": \"$model_url\", \"model\": \"stub\"}" >/dev/null
+if [ "${SETUP_WALK_TIER:-private}" = shared ]; then
+    post api/tier "{\"tier\": \"shared\", \"model\": \"${SETUP_WALK_MODEL:-stub}\"}" >/dev/null
+else
+    post api/tier "{\"tier\": \"private\", \"base_url\": \"$model_url\", \"model\": \"stub\"}" >/dev/null
+fi
 post api/channels '{"channels": []}' >/dev/null
 post api/personality '{"type": "mentor", "voice": "female"}' >/dev/null
 echo "ok: model, channels and personality saved"

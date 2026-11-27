@@ -1,9 +1,11 @@
 """A tiny OpenAI-compatible model server for the image test: always answers REPLY.
 
 python3 stub_model.py PORT   (stdlib only; handles plain and streamed chat completions)
+With STUB_MODEL_RECORD=FILE set, every chat request body is appended to FILE (one JSON line each).
 """
 
 import json
+import os
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -31,7 +33,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         n = int(self.headers.get("Content-Length") or 0)
-        req = json.loads(self.rfile.read(n) or b"{}")
+        raw = self.rfile.read(n) or b"{}"
+        req = json.loads(raw)
+        if os.environ.get("STUB_MODEL_RECORD"):
+            with open(os.environ["STUB_MODEL_RECORD"], "ab") as f:
+                f.write(raw.replace(b"\n", b" ") + b"\n")
         now = int(time.time())
         if not self.path.rstrip("/").endswith("/chat/completions"):
             return self._json({"error": {"message": f"stub has no {self.path}"}}, 404)

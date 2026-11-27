@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -10,6 +11,8 @@ from sksidekick.home import Home
 from sksidekick.setup import state
 
 KEY_VAR = "CUSTOM_API_KEY"
+GATEWAY_TOKEN_VAR = "SKSIDEKICK_GATEWAY_TOKEN"
+GATEWAY_PROVIDER = "sidekick-gateway"
 
 
 class HermesError(RuntimeError):
@@ -118,10 +121,37 @@ def set_model(home: Home, *, base_url: str, model: str, api_key: str | None) -> 
         config_set(home, "model.provider", "custom")
         config_set(home, "model.base_url", base_url)
         config_set(home, "model.default", model)
-        if api_key:
-            set_env(home, KEY_VAR, api_key)
-        else:
-            _rewrite_env(home, KEY_VAR, None)  # a key from an earlier choice must not outlive it
+        # a key or gateway token from an earlier choice must not outlive it
+        _rewrite_envs(home, {KEY_VAR: api_key or None, GATEWAY_TOKEN_VAR: None})
+    except BaseException:
+        restore(snap)
+        raise
+
+
+def set_gateway(home: Home, invite, model: str) -> None:
+    """Point Hermes at the sidekick gateway as a named provider whose extra_headers carry the client id.
+
+    `hermes config set` takes a mapping literal (parsed as YAML/JSON), so config.yaml is written by Hermes
+    itself. The provider block comes first, the choice of it second, .env last; all files are restored byte
+    for byte on failure. The token goes only to .env, never to a command line.
+    """
+    state.ensure_hermes_dir(home)
+    snap = snapshot([home.hermes_dir / "config.yaml", _env_path(home)])
+    base = f"providers.{GATEWAY_PROVIDER}"
+    headers = {
+        "x-agent-id": invite.agent_id,
+        "x-sk-client-id": invite.client_id,
+        "x-sk-credential-revision": invite.credential_revision,
+    }
+    try:
+        _check_env(GATEWAY_TOKEN_VAR, invite.token)
+        config_set(home, f"{base}.api", invite.gateway_url)
+        config_set(home, f"{base}.key_env", GATEWAY_TOKEN_VAR)
+        config_set(home, f"{base}.default_model", model)
+        config_set(home, f"{base}.extra_headers", json.dumps(headers))
+        config_set(home, "model.provider", GATEWAY_PROVIDER)
+        config_set(home, "model.default", model)
+        _rewrite_envs(home, {GATEWAY_TOKEN_VAR: invite.token, KEY_VAR: None})
     except BaseException:
         restore(snap)
         raise
